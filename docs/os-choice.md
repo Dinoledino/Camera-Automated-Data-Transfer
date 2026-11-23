@@ -16,7 +16,7 @@ Ordre d'évaluation : **C** (postmarketOS) → **B** (GSI TrebleDroid vanilla) �
 | Treble | `ro.treble.enabled=true` (compatible GSI, option B) |
 | USB hôte (Android) | `android.hardware.usb.host` déclaré |
 | SELinux | enforcing |
-| Firmware d'origine téléchargé (nom du fichier, SHA-256) | à télécharger : SM-A505FN / XEF, au moins `A505FNXXU9CWB4` |
+| Firmware d'origine téléchargé (nom du fichier, SHA-256) | à télécharger : SM-A505FN / XEF, au moins `A505FNXXU9CWB4`. C'est la dernière version publiée, et Samsung ne sert plus que la dernière version : c'est donc précisément celle qu'on obtiendra. Outil conseillé : Bifrost (SamloaderKotlin, maintenu en 2026) |
 
 ## Option C : postmarketOS
 Note : depuis fin 2026, postmarketOS est hébergé sous `nura.eco` (wiki.nura.eco, gitlab.nura.eco ; les anciennes adresses redirigent). Le wiki est protégé par Anubis et refuse les clients automatisés, mais `git clone` du dépôt pmaports fonctionne.
@@ -28,6 +28,9 @@ Note : depuis fin 2026, postmarketOS est hébergé sous `nura.eco` (wiki.nura.ec
 - `deviceinfo_external_storage="true"` : la microSD est prévue.
 - Configuration du noyau : `CONFIG_USB_XHCI_HCD=y`, `CONFIG_USB_DWC3_DUAL_ROLE=y`, `CONFIG_USB_HOST_NOTIFY=y`. Le mode hôte USB est donc compilé, ce qui ne prouve pas qu'il fonctionne réellement.
 - **2026-11-23 : `pmbootstrap build linux-samsung-a50` réussit** (pmbootstrap 3.12.1, canal edge, en 8 min sur un i5-9600KF). `gcc6-aarch64` est disponible précompilé : pas besoin de compiler le compilateur.
+- **vbmeta** : le `deviceinfo` de l'A50 ne déclare pas de partition vbmeta. Or, avec un bootloader déverrouillé, les Samsung de cette époque refusent de démarrer un boot.img modifié tant que vbmeta n'est pas neutralisé (erreur `vbmeta HASH_MISMATCH`, boucle en mode Download). Les portages Samsung comparables le déclarent : S10 Exynos `beyond1lte-downstream` (2019, heimdall) `deviceinfo_flash_heimdall_partition_vbmeta="VBMETA"`, et A21s.
+  - Solution : `pmbootstrap flasher flash_vbmeta --partition VBMETA`. Cette commande génère avec `avbtool make_vbmeta_image --flags 2` une image vbmeta dont la vérification est désactivée, puis la flashe avec heimdall. Elle passe **avant** `flash_kernel`.
+  - **À VÉRIFIER** : le nom exact de la partition sur l'A50. En mode Download, lancer `heimdall print-pit --no-reboot | grep -i -A3 vbmeta`.
 - Conséquence : l'option C est plus risquée que prévu (pas de maintenance, compilation complète). Elle reste peu coûteuse à essayer, car un retour au firmware d'origine reste possible.
 
 | Test | Commande / méthode | Résultat | Notes |
