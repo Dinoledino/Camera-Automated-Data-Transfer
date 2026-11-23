@@ -10,7 +10,7 @@ Faire de l'A50 un compagnon de prise de vue :
 
 ## 2. Matériel et faits établis
 
-### Samsung Galaxy A50 (probablement SM-A505F / A505FN, à confirmer dans Paramètres > À propos)
+### Samsung Galaxy A50 : SM-A505FN, CSC XEF, bootloader binaire 9 (A505FNXXU9CWB4), 4 Go de RAM, 128 Go (détails dans docs/os-choice.md)
 - Puce Exynos 9610, 4 ou 6 Go de RAM, 64 ou 128 Go de stockage.
 - Emplacement microSD jusqu'à 1 To : c'est le stockage principal des sauvegardes.
 - Port USB-C en **USB 2.0** : débit pratique estimé entre 25 et 35 Mo/s, à mesurer en phase 2.

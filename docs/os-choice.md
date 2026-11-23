@@ -5,15 +5,29 @@ Ordre d'évaluation : **C** (postmarketOS) → **B** (GSI TrebleDroid vanilla) �
 ## Identification du téléphone
 | Élément | Valeur |
 |---|---|
-| Modèle exact (Paramètres > À propos) | _à remplir_ (SM-A505F / FN / …) |
-| Version de One UI / Android | |
-| Version du bootloader (binaire, ex. « U5 ») | |
-| CSC (région) | |
-| RAM / stockage | |
-| Firmware d'origine téléchargé (nom du fichier, SHA-256) | |
+| Modèle exact | **SM-A505FN** (appareil `a50`, produit `a50eea`) |
+| Version d'Android | Android 11 (API 30), correctif de sécurité du 2023-03-01 (dernière mise à jour Samsung) |
+| Build / bootloader | `A505FNXXU9CWB4` : bootloader en **binaire 9** (« U9 »). On ne peut pas flasher un firmware de binaire inférieur |
+| CSC (région) | `XEF` (France) |
+| Noyau d'origine | 4.14.113 |
+| RAM / stockage | 4 Go / 128 Go (58 Go utilisés au 2026-11-23 : **données à sauvegarder avant tout flash**) |
+| microSD | aucune insérée au 2026-11-23 |
+| Verrouillage | bootloader verrouillé (`flash.locked=1`, état vérifié `green`), Knox intact (`warranty_bit=0`), `ro.oem_unlock_supported=1` |
+| Treble | `ro.treble.enabled=true` (compatible GSI, option B) |
+| USB hôte (Android) | `android.hardware.usb.host` déclaré |
+| SELinux | enforcing |
+| Firmware d'origine téléchargé (nom du fichier, SHA-256) | à télécharger : SM-A505FN / XEF, au moins `A505FNXXU9CWB4` |
 
 ## Option C : postmarketOS
-État du portage `samsung-a50` : **À VÉRIFIER**. Le 2026-11-23, wiki.postmarketos.org et gitlab.postmarketos.org redirigeaient (301/308) vers les domaines `wiki.nura.eco` et `gitlab.nura.eco`. Il faut confirmer que ce sont bien les adresses officielles avant de s'y fier.
+Note : depuis fin 2026, postmarketOS est hébergé sous `nura.eco` (wiki.nura.eco, gitlab.nura.eco ; les anciennes adresses redirigent). Le wiki est protégé par Anubis et refuse les clients automatisés, mais `git clone` du dépôt pmaports fonctionne.
+
+État du portage `samsung-a50` dans pmaports, d'après un clone du 2026-11-23 :
+- **Catégorie `archived`, sans mainteneur** (`# Archived: unmaintained`, `maintainer=""`). Les paquets ne sont probablement plus construits par les dépôts binaires : il faudra sans doute tout compiler en local avec pmbootstrap. **À VÉRIFIER.**
+- Noyau d'origine Samsung (fork du noyau constructeur) `linux-samsung-a50` 4.14.194, configuration tirée de `exynos9610-a50_core_defconfig`. Sa compilation demande `gcc6`, un paquet ancien qui risque de manquer.
+- Flash : `heimdall-bootimg`. Le noyau va dans la partition `BOOT`, le rootfs dans `USERDATA` (image creuse, « sparse »). La partition BOOT est limitée à environ 55 Mo.
+- `deviceinfo_external_storage="true"` : la microSD est prévue.
+- Configuration du noyau : `CONFIG_USB_XHCI_HCD=y`, `CONFIG_USB_DWC3_DUAL_ROLE=y`, `CONFIG_USB_HOST_NOTIFY=y`. Le mode hôte USB est donc compilé, ce qui ne prouve pas qu'il fonctionne réellement.
+- Conséquence : l'option C est plus risquée que prévu (pas de maintenance, compilation complète). Elle reste peu coûteuse à essayer, car un retour au firmware d'origine reste possible.
 
 | Test | Commande / méthode | Résultat | Notes |
 |---|---|---|---|
