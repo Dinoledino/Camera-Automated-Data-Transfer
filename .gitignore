@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Données locales : jamais de photos, bases ou rapports de sonde bruts dans le dépôt
+*.part
+*.NEF
+*.nef
+*.JPG
+*.jpg
+*.db
+*.db-wal
+*.db-shm
+/data/
+/photos/
+/logs/
+
+# Configuration locale (garder config.example.toml versionné)
+config.toml
+
+# Firmwares Samsung (lourds, non redistribuables)
+firmware/
+*.tar.md5
+
+# Éditeurs
+.vscode/
+.idea/
+*.swp
