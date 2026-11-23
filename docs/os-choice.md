@@ -27,6 +27,7 @@ Note : depuis fin 2026, postmarketOS est hébergé sous `nura.eco` (wiki.nura.ec
 - Flash : `heimdall-bootimg`. Le noyau va dans la partition `BOOT`, le rootfs dans `USERDATA` (image creuse, « sparse »). La partition BOOT est limitée à environ 55 Mo.
 - `deviceinfo_external_storage="true"` : la microSD est prévue.
 - Configuration du noyau : `CONFIG_USB_XHCI_HCD=y`, `CONFIG_USB_DWC3_DUAL_ROLE=y`, `CONFIG_USB_HOST_NOTIFY=y`. Le mode hôte USB est donc compilé, ce qui ne prouve pas qu'il fonctionne réellement.
+- **2026-11-23 : `pmbootstrap build linux-samsung-a50` réussit** (pmbootstrap 3.12.1, canal edge, en 8 min sur un i5-9600KF). `gcc6-aarch64` est disponible précompilé : pas besoin de compiler le compilateur.
 - Conséquence : l'option C est plus risquée que prévu (pas de maintenance, compilation complète). Elle reste peu coûteuse à essayer, car un retour au firmware d'origine reste possible.
 
 | Test | Commande / méthode | Résultat | Notes |

@@ -101,9 +101,11 @@ Objectif : un système minimaliste qui ne fait que ce dont le projet a besoin. T
 *Préparation du PC*
 ```bash
 sudo apt update
-sudo apt install git pipx heimdall-flash adb android-sdk-platform-tools-common
+sudo apt install git pipx python3-venv kpartx heimdall-flash adb android-sdk-platform-tools-common
 # android-sdk-platform-tools-common installe les règles udev qui permettent d'accéder aux appareils Android/Samsung sans être root
-pipx ensurepath && pipx install pmbootstrap   # version récente ; éviter le paquet apt, souvent ancien
+pipx ensurepath
+# pmbootstrap n'est plus publié sur PyPI (versions retirées) : installer le dernier tag depuis git
+pipx install "git+https://gitlab.nura.eco/postmarketOS/pmbootstrap.git@$(git ls-remote --tags --refs https://gitlab.nura.eco/postmarketOS/pmbootstrap.git | sed 's|.*refs/tags/||' | sort -V | tail -1)"
 # se déconnecter puis se reconnecter pour mettre à jour le PATH
 heimdall version && adb version && pmbootstrap --version
 ```
