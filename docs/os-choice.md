@@ -16,7 +16,7 @@ Ordre d'évaluation : **C** (postmarketOS) → **B** (GSI TrebleDroid vanilla) �
 | Treble | `ro.treble.enabled=true` (compatible GSI, option B) |
 | USB hôte (Android) | `android.hardware.usb.host` déclaré |
 | SELinux | enforcing |
-| Firmware d'origine téléchargé (nom du fichier, SHA-256) | à télécharger : SM-A505FN / XEF, au moins `A505FNXXU9CWB4`. C'est la dernière version publiée, et Samsung ne sert plus que la dernière version : c'est donc précisément celle qu'on obtiendra. Outil conseillé : Bifrost (SamloaderKotlin, maintenu en 2026) |
+| Firmware d'origine | **Téléchargé le 2026-11-23 avec Bifrost 2.1.4.** Fichier `SM-A505FN_2_20230304140301_rqrfoux5q6_fac_A505FNXXU9CWB4_A505FNOXM9CWB4_A505FXXU9CWB1_A505FNXXU9CWB4_XEF.zip` (4,7 Go), SHA-256 `de61b36d574ac83995f784eb89ff8d61035911ba8d6edeedcc85f26d81c24796`, CRC du zip OK. Contenu : BL, AP, CP, CSC et HOME_CSC en `A505FNXXU9CWB4` / CP `A505FXXU9CWB1`. Retour à l'origine : BL + AP + CP + **CSC** (pas HOME_CSC). `vbmeta.img` est présent dans BL et dans AP. Rangé hors du dépôt, dans `~/Bureau/projets/DispositifNikon/` |
 
 ## Option C : postmarketOS
 Note : depuis fin 2026, postmarketOS est hébergé sous `nura.eco` (wiki.nura.eco, gitlab.nura.eco ; les anciennes adresses redirigent). Le wiki est protégé par Anubis et refuse les clients automatisés, mais `git clone` du dépôt pmaports fonctionne.
