@@ -15,6 +15,7 @@ fichier n'apparaît normalement qu'une fois écrit : la règle coûte alors un p
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import signal
 import sys
@@ -23,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Protocol
 
-from .db import Database
+from .db import Database, utc_now
 from .downloader import DiskFull, Downloader, Outcome, SourceDisconnected, SourceError
 
 if TYPE_CHECKING:
@@ -133,6 +134,13 @@ class Watcher:
             result.indexed = self.indexer.run(max_seconds=self.index_budget_seconds)
         return result
 
+    def _status(self, camera: str, full: bool = False) -> None:
+        """État lu par l'interface (processus séparé) : appareil, mémoire pleine, dernier passage."""
+        self.db.conn.execute(
+            "INSERT INTO app_state (key, value) VALUES ('watcher_status', ?) "
+            "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            (json.dumps({"camera": camera, "full": full, "at": utc_now()}),))
+
     def shooting_jpeg(self) -> bool:
         """Les dernières photos détectées comptent-elles au moins un JPEG ?"""
         return self.db.conn.execute(
@@ -159,6 +167,7 @@ class Watcher:
         (ex. vider la corbeille) et renvoie le nombre d'octets libérés.
         """
         self.downloader.recover()
+        self._status("démarrage")
         if self.trash is not None:
             self.trash.recover()
             self.trash.expire()
@@ -169,6 +178,7 @@ class Watcher:
             started = time.monotonic()
             try:
                 r = self.poll_once()
+                self._status("connecté", full=False)
                 if full and r.saved:
                     full = False
                     self.db.log_event("storage_ok", message="de la place s'est libérée : la copie reprend")
@@ -184,6 +194,7 @@ class Watcher:
                 if wait > 0:
                     sleep(wait)
             except SourceDisconnected as e:
+                self._status("absent", full=full)
                 log.warning("appareil injoignable (%s) ; nouvel essai dans %.0f s", e, reconnect_delay)
                 self._candidates.clear()
                 sleep(reconnect_delay)
@@ -197,6 +208,7 @@ class Watcher:
                               "l'appareil photo", self.db.count_unsaved())
                     self.db.log_event("storage_full", message="mémoire du téléphone pleine : copie arrêtée")
                 full = True
+                self._status("connecté", full=True)
                 sleep(full_retry_delay)
                 continue
             except SourceError as e:

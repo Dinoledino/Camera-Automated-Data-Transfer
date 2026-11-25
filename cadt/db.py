@@ -20,7 +20,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 _SCHEMA_FILE = Path(__file__).with_name("schema.sql")  # version 1
 _MIGRATIONS_DIR = Path(__file__).with_name("migrations")  # NNN_<nom>.sql → version NNN
 
@@ -70,6 +70,7 @@ class Photo:
     trash_origin: str | None = None
     trash_boot: str | None = None
     purged_at: str | None = None
+    favorite: int = 0
 
     @property
     def in_trash(self) -> bool:
@@ -618,6 +619,12 @@ class Database:
             c.execute("UPDATE photos SET rating = ?, updated_at = ? WHERE id = ?",
                       (rating, utc_now(), photo_id))
             self._log(c, "rating", photo_id, data={"rating": rating})
+
+    def set_favorite(self, photo_id: int, favorite: bool) -> None:
+        with self.transaction() as c:
+            c.execute("UPDATE photos SET favorite = ?, updated_at = ? WHERE id = ?",
+                      (1 if favorite else 0, utc_now(), photo_id))
+            self._log(c, "favorite", photo_id, data={"favorite": favorite})
 
     def set_flag(self, photo_id: int, flag: str) -> None:
         with self.transaction() as c:

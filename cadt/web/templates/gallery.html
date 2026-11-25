@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% set tab = "photos" %}
+{% block content %}
+<div class="page">
+<header class="head">
+  <div class="row">
+    <h1>Photos</h1>
+  </div>
+  <a class="card session" href="/sessions">
+    <svg viewBox="0 0 24 24" class="accent" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    <span class="grow">
+      {% if session %}
+        <small>{{ "Session active" if active and active.id == session.id else "Session" }}</small>
+        <strong>{{ session.name }}</strong>
+      {% else %}
+        <small>{{ "Session active : " ~ active.name if active else "Aucune session active" }}</small>
+        <strong>Toutes les photos</strong>
+      {% endif %}
+    </span>
+    <span class="link">Changer</span>
+  </a>
+</header>
+
+<section class="card status" id="status" data-unsaved="{{ status.unsaved }}">
+  <div class="line muted">
+    <svg viewBox="0 0 24 24" class="blue" aria-hidden="true"><path d="M12 2v14M8 6l4-4 4 4"/><circle cx="12" cy="19" r="3"/></svg>
+    <span>{{ "Appareil photo branché" if status.camera == "branché" else "Appareil photo non détecté" }}</span>
+    {% if status.copying %}<span class="end">Copie en cours</span>{% endif %}
+  </div>
+  {% if status.full %}
+    <p class="big warn">Mémoire du téléphone pleine : la copie est arrêtée</p>
+  {% elif status.unsaved %}
+    <p class="big warn">{{ status.unsaved }} photo{{ "s" if status.unsaved > 1 }} pas encore à l'abri</p>
+  {% else %}
+    <p class="big ok">Toutes les photos sont à l'abri</p>
+  {% endif %}
+  <div class="bar" role="img" aria-label="{{ status.saved }} photos sur {{ status.total }} à l'abri sur le téléphone"><i style="width: {{ status.percent }}%"></i></div>
+  <p class="muted small">{{ status.saved }} sur {{ status.total }} copiées et contrôlées{% if status.deleted_on_camera %}, puis effacées de l'appareil photo{% endif %}</p>
+  {% if status.failed %}<p class="warn small">{{ status.failed }} photo{{ "s" if status.failed > 1 }} n'ont pas pu être copiées : elles restent sur l'appareil photo.</p>{% endif %}
+  <div class="memory">
+    <div class="line small"><strong>Mémoire du téléphone</strong><span class="end muted">{{ storage.percent }} % utilisée · {{ storage.free | human_size }} libres</span></div>
+    <div class="bar thin" role="img" aria-label="Mémoire du téléphone utilisée à {{ storage.percent }} %"><i class="grey" style="width: {{ storage.percent }}%"></i></div>
+    <p class="muted small">Quand elle sera pleine, la copie s'arrêtera : les photos resteront sur l'appareil photo.</p>
+  </div>
+</section>
+
+{% if rejected %}
+<a class="card reject-banner" href="/rejet">
+  <svg viewBox="0 0 24 24" class="red" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  <span class="grow">{{ rejected }} photo{{ "s" if rejected > 1 }} rejetée{{ "s" if rejected > 1 }}</span>
+  <span class="red strong">Supprimer du téléphone</span>
+</a>
+{% endif %}
+
+<nav class="chips" aria-label="Filtres">
+  {% for key, label, n in filters %}
+    <a class="chip {{ 'on' if scope.filter == key }}" href="/?f={{ key }}&s={{ 'toutes' if scope.session_id is none else scope.session_id }}">{{ label }} · {{ n }}</a>
+  {% endfor %}
+</nav>
+
+<main class="grid">
+  {% if status.copying %}
+  <div class="tile pending" role="img" aria-label="{{ status.copying }} photo en cours de copie">
+    <span>Copie en cours{% if status.copying > 1 %} ({{ status.copying }}){% endif %}</span>
+  </div>
+  {% endif %}
+  {% if status.waiting %}
+  <div class="tile pending" role="img" aria-label="{{ status.waiting }} photos en attente de copie">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    <span>En attente ({{ status.waiting }})</span>
+  </div>
+  {% endif %}
+  {% for p in photos %}
+  <a class="tile" href="/photo/{{ p.id }}?{{ qs }}" aria-label="Photo {{ p.name }}{{ ', favorite' if p.favorite }}">
+    <img src="/media/thumb/{{ p.id }}" alt="" loading="lazy">
+    <span class="caption"><span>{{ p.session_number and "%04d" % p.session_number or p.name[4:8] }}</span>
+      {% if p.favorite %}<svg viewBox="0 0 24 24" class="fav" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>{% endif %}
+    </span>
+    {% if p.flag == "keep" %}<span class="badge keep" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></span>
+    {% elif p.flag == "reject" %}<span class="badge reject" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span>{% endif %}
+  </a>
+  {% else %}
+    {% if not status.copying and not status.waiting %}<p class="empty">Aucune photo ici pour l'instant.</p>{% endif %}
+  {% endfor %}
+</main>
+</div>
+{% endblock %}

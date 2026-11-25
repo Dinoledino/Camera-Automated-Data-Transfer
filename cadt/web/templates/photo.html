@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}{{ file_name }}{% endblock %}
+{% block body_class %}viewer{% endblock %}
+{% block content %}
+<div class="page viewer-page" data-prev="{{ '/photo/%d?%s' % (prev_id, qs) if prev_id }}" data-next="{{ '/photo/%d?%s' % (next_id, qs) if next_id }}">
+<header class="viewer-head">
+  <a class="icon-btn" href="/?{{ qs }}" aria-label="Retour à la galerie">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+  </a>
+  <div class="grow ellipsis">
+    {% if details.fichier %}<strong class="ellipsis">{{ file_name }}</strong>{% endif %}
+    <small class="muted">{{ pos }} sur {{ total }}{% if details.heure %} · {{ when }}{% endif %}</small>
+  </div>
+</header>
+
+<div class="stage">
+  <img id="preview" src="/media/preview/{{ photo.id }}" alt="Photo {{ file_name }}">
+  <p class="hint">Balaye à gauche ou à droite pour changer de photo</p>
+</div>
+
+<section class="sheet">
+  <div class="info">
+    {% if details.reglages and settings_line %}<strong>{{ settings_line }}</strong>{% endif %}
+    {% if details.objectif and gear_line %}<span class="muted">{{ gear_line }}</span>{% endif %}
+    <span class="blue-text line">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+      {{ "Copiée et contrôlée, effacée de l'appareil photo" if deleted_on_camera else "Copiée et contrôlée : identique à l'original" }}
+    </span>
+  </div>
+  <button type="button" class="btn fav-btn {{ 'on' if photo.favorite }}" data-photo="{{ photo.id }}" data-action="favorite" aria-pressed="{{ 'true' if photo.favorite else 'false' }}">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>
+    <span>{{ "Dans les favoris" if photo.favorite else "Mettre en favori" }}</span>
+  </button>
+  <div class="two">
+    <button type="button" class="btn flag keep {{ 'on' if photo.flag == 'keep' }}" data-photo="{{ photo.id }}" data-action="flag" data-flag="keep" aria-pressed="{{ 'true' if photo.flag == 'keep' else 'false' }}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>Garder</button>
+    <button type="button" class="btn flag reject {{ 'on' if photo.flag == 'reject' }}" data-photo="{{ photo.id }}" data-action="flag" data-flag="reject" aria-pressed="{{ 'true' if photo.flag == 'reject' else 'false' }}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>Rejeter</button>
+  </div>
+</section>
+{% if next_id %}<link rel="prefetch" href="/media/preview/{{ next_id }}">{% endif %}
+</div>
+{% endblock %}
+{% block nav %}{% endblock %}
