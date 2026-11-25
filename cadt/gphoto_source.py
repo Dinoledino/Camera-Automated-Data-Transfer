@@ -19,13 +19,15 @@ Points connus :
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterator
 
 import gphoto2 as gp
 
+from .camera import CameraFile, storage_of
 from .downloader import CHUNK_SIZE, SourceBusy, SourceDisconnected, SourceError
+
+__all__ = ["CameraFile", "Gphoto2Source", "autodetect", "DIRECTORY_BROWSE"]
 
 DIRECTORY_BROWSE = "Directory Browse"
 
@@ -35,20 +37,6 @@ _DISCONNECTED = {
     gp.GP_ERROR_IO_USB_FIND, gp.GP_ERROR_IO_USB_CLAIM, gp.GP_ERROR_IO_LOCK,
     gp.GP_ERROR_MODEL_NOT_FOUND, gp.GP_ERROR_TIMEOUT,
 }
-
-
-@dataclass(frozen=True)
-class CameraFile:
-    folder: str
-    name: str
-    size: int
-    capture_time: str        # heure locale, ISO 8601 sans fuseau
-    storage_id: str | None   # ex. store_00010001 (premier niveau de l'arborescence PTP)
-
-    @property
-    def key(self) -> tuple[str, int, str]:
-        """Identité d'une photo, comme dans la base : (nom, taille, date)."""
-        return (self.name, self.size, self.capture_time)
 
 
 def autodetect() -> list[tuple[str, str]]:
@@ -157,7 +145,7 @@ class Gphoto2Source:
                 name=name,
                 size=int(info.file.size),
                 capture_time=datetime.fromtimestamp(info.file.mtime).isoformat(timespec="seconds"),
-                storage_id=_storage_of(folder),
+                storage_id=storage_of(folder),
             ))
         for i in range(len(subs := cam.folder_list_folders(folder))):
             sub = subs.get_name(i)
@@ -191,7 +179,3 @@ class Gphoto2Source:
         for i in range(0, len(data), CHUNK_SIZE):
             yield bytes(data[i:i + CHUNK_SIZE])
 
-
-def _storage_of(folder: str) -> str | None:
-    first = folder.strip("/").split("/", 1)[0]
-    return first if first.startswith("store_") else None

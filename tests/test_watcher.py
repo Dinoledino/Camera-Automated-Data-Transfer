@@ -170,3 +170,26 @@ def test_end_to_end_burst_with_gphoto2(tmp_path):
             assert r["state"] == "verified"
             assert r["sha256"] == hashlib.sha256(f.read_bytes()).hexdigest()
             assert Path(r["local_path"]).read_bytes() == f.read_bytes()
+
+
+def test_indexing_waits_until_nothing_is_left_to_save(env):
+    """L'indexation (≈1,5 s par NEF sur l'A50) ne doit pas ralentir une rafale en cours."""
+    db, lister, _, tmp = env
+
+    class CountingIndexer:
+        calls = 0
+
+        def run(self, max_seconds=None):
+            CountingIndexer.calls += 1
+            return 0
+
+    w = Watcher(db, lister, Downloader(db, DirectorySource(tmp / "card"), tmp / "sd"),
+                indexer=CountingIndexer())
+    lister.put("DSC_0001.NEF", b"x" * 10)
+    w.poll_once()                       # fichier en cours de stabilisation
+    assert CountingIndexer.calls == 0
+    lister.put("DSC_0002.NEF", b"y" * 10)
+    w.poll_once()                       # DSC_0001 sauvegardé, DSC_0002 encore candidat
+    assert CountingIndexer.calls == 0
+    w.poll_once()                       # tout est sauvegardé
+    assert CountingIndexer.calls == 1

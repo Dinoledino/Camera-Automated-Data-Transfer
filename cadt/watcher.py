@@ -105,11 +105,17 @@ class Watcher:
             if where not in present:
                 del self._candidates[where]
         result.outcomes = self.downloader.drain()
-        # L'indexation passe après les téléchargements, et seulement le temps imparti :
-        # elle ne retarde jamais la sauvegarde des photos suivantes.
-        if self.indexer is not None:
+        # L'indexation ne passe que quand plus rien n'attend d'être sauvegardé (pas de fichier
+        # en cours de stabilisation, file vide), et seulement le temps imparti : sur l'A50, un
+        # NEF coûte ~1,5 s d'indexation, qu'on ne veut pas voler à une rafale en cours.
+        if self.indexer is not None and not self._candidates and not self._queue_has_ready_work():
             result.indexed = self.indexer.run(max_seconds=self.index_budget_seconds)
         return result
+
+    def _queue_has_ready_work(self) -> bool:
+        return self.db.conn.execute(
+            "SELECT 1 FROM photos WHERE state IN ('detected', 'downloading') AND given_up_at IS NULL "
+            "AND next_attempt_at IS NULL LIMIT 1").fetchone() is not None
 
     def run(self, interval: float = 2.0, reconnect_delay: float = 5.0,
             should_stop: Callable[[], bool] = lambda: False,
