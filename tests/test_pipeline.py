@@ -193,9 +193,22 @@ def test_new_jpeg_overtakes_waiting_raws(tmp_path):
 
         d = Downloader(db, DirectorySource(tmp_path / "card"), tmp_path / "sd", pipelined=False,
                        timer=timer, on_outcome=on_outcome)
-        w = Watcher(db, lister, d, stable_polls=1, drain_budget_seconds=2)
+        w = Watcher(db, lister, d, stable_polls=1, drain_budget_seconds=2, drain_budget_raw_only_seconds=2)
         w.poll_once()                                   # 2 NEF sauvegardés, 4 en attente
         lister.put("DSC_0009.JPG", os.urandom(500))     # nouvelle prise
         while db.count_unsaved() or len(order) < 7:
             w.poll_once()
         assert order.index("DSC_0009.JPG") == 2         # juste après la première tranche
+
+
+def test_drain_budget_depends_on_jpeg_in_recent_shots(tmp_path):
+    lister = FakeLister(tmp_path / "card")
+    with Database(tmp_path / "c.db") as db:
+        w = Watcher(db, lister, Downloader(db, DirectorySource(tmp_path / "card"), tmp_path / "sd"),
+                    drain_budget_seconds=10, drain_budget_raw_only_seconds=60, recent_window=3)
+        assert w.current_drain_budget() == 60                     # rien encore
+        db.add_detected(FOLDER, "DSC_0001.JPG", 1, "2026-11-25T10:00:00")
+        assert w.current_drain_budget() == 10                     # RAW + JPEG
+        for i in range(2, 5):
+            db.add_detected(FOLDER, f"DSC_000{i}.NEF", 1, f"2026-11-25T10:00:0{i}")
+        assert w.current_drain_budget() == 60                     # le JPEG est sorti de la fenêtre

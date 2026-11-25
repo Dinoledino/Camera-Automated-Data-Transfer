@@ -54,7 +54,8 @@ class Watcher:
     def __init__(self, db: Database, lister: Lister, downloader: Downloader,
                  stable_polls: int = 2, refresh_each_poll: bool = True,
                  indexer: "Indexer | None" = None, index_budget_seconds: float = 1.0,
-                 drain_budget_seconds: float = 10.0):
+                 drain_budget_seconds: float = 10.0, drain_budget_raw_only_seconds: float = 60.0,
+                 recent_window: int = 20):
         self.db = db
         self.lister = lister
         self.downloader = downloader
@@ -63,8 +64,12 @@ class Watcher:
         self.indexer = indexer
         self.index_budget_seconds = index_budget_seconds
         # Une vidange rend la main au bout de ce temps : on relit l'appareil, et les JPEG des
-        # prises suivantes passent devant les NEF qui attendent encore.
+        # prises suivantes passent devant les NEF qui attendent encore. En RAW seul, il n'y a
+        # rien à faire passer devant (les NEF partent dans l'ordre chronologique) : des tranches
+        # plus longues évitent de relister l'appareil pour rien (coût mesuré par la sonde).
         self.drain_budget_seconds = drain_budget_seconds
+        self.drain_budget_raw_only_seconds = drain_budget_raw_only_seconds
+        self.recent_window = recent_window
         self._known: set[tuple] = set()               # déjà enregistrés en base
         self._candidates: dict[tuple[str, str], tuple[tuple, int]] = {}  # (dossier, nom) → (clé, vu n fois)
 
@@ -108,13 +113,22 @@ class Watcher:
         for where in list(self._candidates):
             if where not in present:
                 del self._candidates[where]
-        result.outcomes = self.downloader.drain(max_seconds=self.drain_budget_seconds)
+        result.outcomes = self.downloader.drain(max_seconds=self.current_drain_budget())
         # L'indexation ne passe que quand plus rien n'attend d'être sauvegardé (pas de fichier
         # en cours de stabilisation, file vide), et seulement le temps imparti : sur l'A50, un
         # NEF coûte ~1,5 s d'indexation, qu'on ne veut pas voler à une rafale en cours.
         if self.indexer is not None and not self._candidates and not self._queue_has_ready_work():
             result.indexed = self.indexer.run(max_seconds=self.index_budget_seconds)
         return result
+
+    def shooting_jpeg(self) -> bool:
+        """Les dernières photos détectées comptent-elles au moins un JPEG ?"""
+        return self.db.conn.execute(
+            "SELECT 1 FROM (SELECT kind FROM photos ORDER BY id DESC LIMIT ?) WHERE kind = 'jpeg' LIMIT 1",
+            (self.recent_window,)).fetchone() is not None
+
+    def current_drain_budget(self) -> float:
+        return self.drain_budget_seconds if self.shooting_jpeg() else self.drain_budget_raw_only_seconds
 
     def _queue_has_ready_work(self) -> bool:
         return self.db.conn.execute(

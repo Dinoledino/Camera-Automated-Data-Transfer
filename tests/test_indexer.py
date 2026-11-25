@@ -46,7 +46,7 @@ def test_jpeg_metadata_and_images(env):
     db, ix, tmp = env
     photo = saved_photo(db, make_jpeg(tmp / "DSC_0001.JPG"))
 
-    assert ix.run() == 1
+    assert ix.run() == 2  # miniature, puis aperçu
     m = ix.get(photo.id)
     assert m.error is None
     assert (m.model, m.iso, m.aperture, m.exposure_time, m.focal_length) == ("NIKON D850", 400, 2.8, 0.004, 50)
@@ -73,6 +73,7 @@ def test_broken_file_is_recorded_not_retried(env):
     assert ix.run() == 1
     m = ix.get(photo.id)
     assert m.error and m.thumb_path is None
+    assert ix.pending_previews() == []
     assert ix.pending() == []  # pas de boucle sur un fichier cassé
     assert "index_error" in [e["kind"] for e in db.events(photo.id)]
     ix.reindex([photo.id])
@@ -110,7 +111,7 @@ def test_real_d850_nef(env):
     shutil.copy(SAMPLE_NEF, nef)
     photo = saved_photo(db, nef)
 
-    m = ix.index(photo)
+    m = ix.index(photo, with_preview=True)
     assert m.error is None
     assert (m.model, m.lens, m.iso, m.shutter_count) == ("NIKON D850", "Sigma 35mm F1.4 DG HSM", 64, 447)
     assert (m.width, m.height) == (8288, 5520)
@@ -141,4 +142,33 @@ def test_watcher_indexes_after_downloads(tmp_path):
         w = Watcher(db, lister, Downloader(db, DirectorySource(card), sd), stable_polls=1,
                     indexer=Indexer(db, sd, et))
         r = w.poll_once()
-        assert r.saved == 1 and r.indexed == 1
+        assert r.saved == 1 and r.indexed == 2
+
+
+def test_thumbnails_for_all_before_any_preview(env):
+    db, ix, tmp = env
+    photos = [saved_photo(db, make_jpeg(tmp / f"DSC_00{i}0.JPG"), t=f"2026-11-25T14:00:0{i}") for i in range(3)]
+    order = []
+    real_index, real_preview = ix.index, ix.make_preview
+    ix.index = lambda p, **kw: (order.append(("miniature", p.id)), real_index(p, **kw))[1]
+    ix.make_preview = lambda p: (order.append(("aperçu", p.id)), real_preview(p))[1]
+    assert ix.run() == 6
+    assert [k for k, _ in order] == ["miniature"] * 3 + ["aperçu"] * 3
+    assert all(ix.get(p.id).preview_path for p in photos)
+
+
+def test_ensure_preview_on_demand(env):
+    db, ix, tmp = env
+    photo = saved_photo(db, make_jpeg(tmp / "DSC_0100.JPG"))
+    ix.run(max_photos=1)                     # miniature seulement
+    assert ix.get(photo.id).preview_path is None
+    path = ix.ensure_preview(photo.id)
+    assert path and Image.open(path).size == (1200, 800)
+    assert ix.ensure_preview(photo.id) == path  # déjà fait : pas de nouveau calcul
+    assert ix.pending_previews() == []
+
+
+def test_ensure_preview_refuses_unsaved_photo(env):
+    db, ix, tmp = env
+    p, _ = db.add_detected("/DCIM/100NC850", "DSC_0200.JPG", 10, "2026-11-25T14:00:00")
+    assert ix.ensure_preview(p.id) is None
