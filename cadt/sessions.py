@@ -85,6 +85,9 @@ def move_photos(db: Database, dest_root: "str | Path | StoragePool", photo_ids: 
         if photo is None:
             refused.append((photo_id, "introuvable"))
             continue
+        if photo.trashed_at or photo.purged_at:
+            refused.append((photo_id, "dans la corbeille ou supprimée"))
+            continue
         if photo.state == "detected":
             reassigned.append(db.assign_session(photo_id, session_id))
             continue

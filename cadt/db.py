@@ -20,7 +20,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _SCHEMA_FILE = Path(__file__).with_name("schema.sql")  # version 1
 _MIGRATIONS_DIR = Path(__file__).with_name("migrations")  # NNN_<nom>.sql → version NNN
 
@@ -66,6 +66,14 @@ class Photo:
     next_attempt_at: str | None = None
     given_up_at: str | None = None
     priority: int = 0
+    trashed_at: str | None = None
+    trash_origin: str | None = None
+    trash_boot: str | None = None
+    purged_at: str | None = None
+
+    @property
+    def in_trash(self) -> bool:
+        return self.trashed_at is not None and self.purged_at is None
 
     @property
     def is_saved(self) -> bool:
@@ -656,6 +664,43 @@ class Database:
                 raise InvalidTransition(f"photo {photo_id} : suppression non demandée")
             self._log(c, "deleted_on_camera", photo_id, note)
 
+    # ------------------------------------------------------------- corbeille
+
+    def mark_trashed(self, photo_id: int, origin: str, boot_id: str | None, at: str | None = None) -> Photo:
+        """at : heure de mise à la corbeille (celle de l'horloge qui calcule le délai)."""
+        with self.transaction() as c:
+            row = c.execute(
+                "UPDATE photos SET trashed_at = ?, trash_origin = ?, trash_boot = ?, updated_at = ? "
+                "WHERE id = ? AND purged_at IS NULL RETURNING *",
+                (at or utc_now(), origin, boot_id, utc_now(), photo_id)).fetchone()
+            if row is None:
+                raise InvalidTransition(f"photo {photo_id} : déjà supprimée")
+            self._log(c, "trashed", photo_id, origin)
+            return Photo(**dict(row))
+
+    def mark_restored(self, photo_id: int) -> Photo:
+        with self.transaction() as c:
+            row = c.execute(
+                "UPDATE photos SET trashed_at = NULL, trash_origin = NULL, trash_boot = NULL, "
+                "flag = CASE flag WHEN 'reject' THEN 'none' ELSE flag END, updated_at = ? "
+                "WHERE id = ? AND purged_at IS NULL RETURNING *", (utc_now(), photo_id)).fetchone()
+            if row is None:
+                raise InvalidTransition(f"photo {photo_id} : déjà supprimée")
+            self._log(c, "restored", photo_id)
+            return Photo(**dict(row))
+
+    def mark_purged(self, photo_id: int, reason: str) -> None:
+        with self.transaction() as c:
+            c.execute("UPDATE photos SET purged_at = ?, updated_at = ? WHERE id = ? AND purged_at IS NULL",
+                      (utc_now(), utc_now(), photo_id))
+            self._log(c, "purged", photo_id, reason)
+
+    def trashed_photos(self) -> list[Photo]:
+        """Photos dans la corbeille, les plus anciennes d'abord."""
+        rows = self.conn.execute("SELECT * FROM photos WHERE trashed_at IS NOT NULL AND purged_at IS NULL "
+                                 "ORDER BY trashed_at, id").fetchall()
+        return [Photo(**dict(r)) for r in rows]
+
     # ------------------------------------------------------------- réglages
 
     def get_setting(self, key: str, default: str | None = None) -> str | None:
@@ -688,6 +733,7 @@ class Database:
             """SELECT * FROM photos
                WHERE state IN ('verified', 'synced_pc')
                  AND delete_state IN ('none', 'delete_requested')
+                 AND purged_at IS NULL  -- supprimée du téléphone : l'appareil garde la dernière copie
                  AND (delete_state = 'delete_requested' OR verified_at >= ?)
                ORDER BY verified_at, id LIMIT ?""", (since, limit)).fetchall()
         return [Photo(**dict(r)) for r in rows]

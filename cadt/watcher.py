@@ -29,6 +29,7 @@ from .downloader import DiskFull, Downloader, Outcome, SourceDisconnected, Sourc
 if TYPE_CHECKING:
     from .cleaner import CameraCleaner
     from .indexer import Indexer
+    from .trash import Trash
 
 log = logging.getLogger("cadt.watcher")
 
@@ -57,7 +58,8 @@ class Watcher:
                  stable_polls: int = 2, refresh_each_poll: bool = True,
                  indexer: "Indexer | None" = None, index_budget_seconds: float = 1.0,
                  drain_budget_seconds: float = 10.0, drain_budget_raw_only_seconds: float = 60.0,
-                 recent_window: int = 20, cleaner: "CameraCleaner | None" = None):
+                 recent_window: int = 20, cleaner: "CameraCleaner | None" = None,
+                 trash: "Trash | None" = None):
         self.db = db
         self.lister = lister
         self.downloader = downloader
@@ -73,6 +75,7 @@ class Watcher:
         self.drain_budget_raw_only_seconds = drain_budget_raw_only_seconds
         self.recent_window = recent_window
         self.cleaner = cleaner                # effacement de l'appareil après vérification
+        self.trash = trash                    # corbeille : expiration à chaque passage
         self._last_listing: list = []
         self._known: set[tuple] = set()               # déjà enregistrés en base
         self._candidates: dict[tuple[str, str], tuple[tuple, int]] = {}  # (dossier, nom) → (clé, vu n fois)
@@ -121,6 +124,8 @@ class Watcher:
         result.outcomes = self.downloader.drain(max_seconds=self.current_drain_budget())
         if self.cleaner is not None:
             result.deleted_on_camera = len(self.cleaner.run(self._last_listing).deleted)
+        if self.trash is not None:
+            self.trash.expire()
         # L'indexation ne passe que quand plus rien n'attend d'être sauvegardé (pas de fichier
         # en cours de stabilisation, file vide), et seulement le temps imparti : sur l'A50, un
         # NEF coûte ~1,5 s d'indexation, qu'on ne veut pas voler à une rafale en cours.
@@ -154,6 +159,11 @@ class Watcher:
         (ex. vider la corbeille) et renvoie le nombre d'octets libérés.
         """
         self.downloader.recover()
+        if self.trash is not None:
+            self.trash.recover()
+            self.trash.expire()
+            if on_disk_full is None:
+                on_disk_full = self.trash.free_space
         full = False
         while not should_stop():
             started = time.monotonic()
@@ -235,8 +245,9 @@ def main(argv: list[str] | None = None) -> int:
             from .indexer import Indexer
             indexer = Indexer(db, pool.primary, exiftool)
         from .cleaner import CameraCleaner
+        from .trash import Trash
         watcher = Watcher(db, source, Downloader(db, source, pool), indexer=indexer,
-                          cleaner=CameraCleaner(db, source))
+                          cleaner=CameraCleaner(db, source), trash=Trash(db, pool))
         try:
             watcher.run(interval=args.interval, should_stop=lambda: stop)
         finally:

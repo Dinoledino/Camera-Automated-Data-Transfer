@@ -96,6 +96,7 @@ class Indexer:
         rows = self.db.conn.execute(
             """SELECT p.* FROM photos p LEFT JOIN media m ON m.photo_id = p.id
                WHERE p.state IN ('verified', 'synced_pc') AND m.photo_id IS NULL
+                 AND p.trashed_at IS NULL AND p.purged_at IS NULL
                ORDER BY CASE p.kind WHEN 'jpeg' THEN 0 WHEN 'raw' THEN 1 ELSE 2 END,
                         p.capture_time, p.id
                LIMIT ?""", (limit,)).fetchall()
@@ -106,6 +107,7 @@ class Indexer:
         rows = self.db.conn.execute(
             """SELECT p.* FROM photos p JOIN media m ON m.photo_id = p.id
                WHERE p.state IN ('verified', 'synced_pc') AND p.kind IN ('raw', 'jpeg')
+                 AND p.trashed_at IS NULL AND p.purged_at IS NULL
                  AND m.preview_path IS NULL AND m.error IS NULL
                ORDER BY p.capture_time, p.id
                LIMIT ?""", (limit,)).fetchall()
