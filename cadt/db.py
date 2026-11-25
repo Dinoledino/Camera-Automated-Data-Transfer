@@ -11,15 +11,18 @@ Principes :
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
-SCHEMA_VERSION = 1
-_SCHEMA_FILE = Path(__file__).with_name("schema.sql")
+SCHEMA_VERSION = 2
+_SCHEMA_FILE = Path(__file__).with_name("schema.sql")  # version 1
+_MIGRATIONS_DIR = Path(__file__).with_name("migrations")  # NNN_<nom>.sql → version NNN
 
 RAW_EXTENSIONS = {".nef", ".nrw"}
 JPEG_EXTENSIONS = {".jpg", ".jpeg"}
@@ -58,10 +61,40 @@ class Photo:
     verified_at: str | None
     synced_at: str | None
     updated_at: str
+    session_id: int | None = None
+    session_number: int | None = None
 
     @property
     def is_saved(self) -> bool:
         return self.state in SAVED_STATES
+
+
+@dataclass(frozen=True)
+class Session:
+    id: int
+    name: str
+    slug: str
+    day: str
+    folder: str
+    next_number: int
+    created_at: str
+
+
+@dataclass(frozen=True)
+class PendingMove:
+    photo_id: int
+    src: str
+    dst: str
+    session_id: int | None
+    session_number: int | None
+    created_at: str
+
+
+def slugify(name: str) -> str:
+    """« Mariage Dupont (église) » → « Mariage-Dupont-eglise » : sûr pour FAT/exFAT et les URL."""
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", ascii_name).strip("-")
+    return slug[:60].rstrip("-") or "session"
 
 
 def utc_now() -> str:
@@ -123,11 +156,21 @@ class Database:
             return
         if version > SCHEMA_VERSION:
             raise RuntimeError(f"Base en version {version}, code en version {SCHEMA_VERSION}")
+        steps: list[tuple[int, Path]] = []
         if version == 0:
-            with self.transaction() as c:
-                for statement in _split_sql(_SCHEMA_FILE.read_text(encoding="utf-8")):
+            steps.append((1, _SCHEMA_FILE))
+        for f in sorted(_MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql")):
+            n = int(f.name[:3])
+            if max(version, 1) < n <= SCHEMA_VERSION:
+                steps.append((n, f))
+        if not steps or steps[-1][0] != SCHEMA_VERSION:
+            raise RuntimeError(f"migration manquante vers la version {SCHEMA_VERSION}")
+        # Une seule transaction : soit la base passe entièrement en nouvelle version, soit rien.
+        with self.transaction() as c:
+            for n, f in steps:
+                for statement in _split_sql(f.read_text(encoding="utf-8")):
                     c.execute(statement)
-                c.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                c.execute(f"PRAGMA user_version = {n}")
 
     def _log(self, c: sqlite3.Connection, kind: str, photo_id: int | None = None,
              message: str | None = None, data: dict[str, Any] | None = None) -> None:
@@ -199,7 +242,11 @@ class Database:
             ).fetchone()
             if row is not None:
                 photo = Photo(**dict(row))
-                self._log(c, "detected", photo.id, f"{camera_folder}/{name}")
+                session_id = self._active_session_id(c)
+                if session_id is not None:
+                    photo = self._attach(c, photo, session_id)
+                self._log(c, "detected", photo.id, f"{camera_folder}/{name}",
+                          data={"session_id": session_id} if session_id else None)
                 return photo, True
             row = c.execute(
                 "SELECT * FROM photos WHERE name = ? AND size = ? AND capture_time = ?",
@@ -209,20 +256,25 @@ class Database:
 
     # ------------------------------------------------------------- file
 
-    def claim_next(self) -> Photo | None:
-        """Prend atomiquement la prochaine photo à télécharger : JPEG > RAW > autres, puis chronologique."""
+    def claim_next(self, exclude: Iterable[int] = ()) -> Photo | None:
+        """Prend atomiquement la prochaine photo à télécharger : JPEG > RAW > autres, puis chronologique.
+
+        exclude : ids à ignorer (par exemple les photos abandonnées après trop d'échecs).
+        """
+        excluded = list(exclude)
+        not_in = f"AND id NOT IN ({','.join('?' * len(excluded))})" if excluded else ""
         with self.transaction() as c:
             row = c.execute(
-                """UPDATE photos
+                f"""UPDATE photos
                    SET state = 'downloading', attempts = attempts + 1, updated_at = ?
                    WHERE id = (
                        SELECT id FROM photos
-                       WHERE state = 'detected'
+                       WHERE state = 'detected' {not_in}
                        ORDER BY CASE kind WHEN 'jpeg' THEN 0 WHEN 'raw' THEN 1 ELSE 2 END,
                                 capture_time, id
                        LIMIT 1)
                    RETURNING *""",
-                (utc_now(),),
+                (utc_now(), *excluded),
             ).fetchone()
             if row is None:
                 return None
@@ -307,6 +359,158 @@ class Database:
             for p in photos:
                 self._log(c, "reset_interrupted", p.id)
             return photos
+
+    # ------------------------------------------------------------- sessions
+
+    def create_session(self, name: str, day: str | None = None) -> Session:
+        """Crée une session. day : date locale AAAA-MM-JJ (aujourd'hui par défaut)."""
+        name = name.strip()
+        if not name:
+            raise ValueError("nom de session vide")
+        day = day or date.today().isoformat()
+        slug = slugify(name)
+        with self.transaction() as c:
+            folder, n = f"{day}_{slug}", 2
+            while c.execute("SELECT 1 FROM sessions WHERE folder = ?", (folder,)).fetchone():
+                folder, n = f"{day}_{slug}-{n}", n + 1
+            row = c.execute(
+                "INSERT INTO sessions (name, slug, day, folder, created_at) "
+                "VALUES (?, ?, ?, ?, ?) RETURNING *",
+                (name, folder[len(day) + 1:], day, folder, utc_now()),
+            ).fetchone()
+            session = Session(**dict(row))
+            self._log(c, "session_created", data={"session_id": session.id, "folder": folder})
+            return session
+
+    def get_session(self, session_id: int) -> Session | None:
+        row = self.conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        return Session(**dict(row)) if row else None
+
+    def list_sessions(self) -> list[Session]:
+        rows = self.conn.execute("SELECT * FROM sessions ORDER BY day DESC, id DESC").fetchall()
+        return [Session(**dict(r)) for r in rows]
+
+    def _active_session_id(self, c: sqlite3.Connection) -> int | None:
+        row = c.execute("SELECT value FROM app_state WHERE key = 'active_session_id'").fetchone()
+        return int(row["value"]) if row and row["value"] is not None else None
+
+    def active_session(self) -> Session | None:
+        session_id = self._active_session_id(self.conn)
+        return self.get_session(session_id) if session_id is not None else None
+
+    def set_active_session(self, session_id: int | None) -> None:
+        """Les photos détectées à partir de maintenant iront dans cette session (None : aucune)."""
+        with self.transaction() as c:
+            if session_id is not None and not c.execute(
+                    "SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone():
+                raise ValueError(f"session {session_id} introuvable")
+            c.execute("INSERT INTO app_state (key, value) VALUES ('active_session_id', ?) "
+                      "ON CONFLICT (key) DO UPDATE SET value = excluded.value", (session_id,))
+            self._log(c, "active_session", data={"session_id": session_id})
+
+    def _number_for(self, c: sqlite3.Connection, session_id: int, group_key: str,
+                    exclude_photo: int | None = None) -> int:
+        """Numéro dans la session : celui de la photo jumelle (RAW/JPEG) s'il existe, sinon le suivant."""
+        twin = c.execute(
+            "SELECT session_number FROM photos WHERE session_id = ? AND group_key = ? "
+            "AND session_number IS NOT NULL AND id IS NOT ?",
+            (session_id, group_key, exclude_photo),
+        ).fetchone()
+        if twin is not None:
+            return twin["session_number"]
+        return c.execute(
+            "UPDATE sessions SET next_number = next_number + 1 WHERE id = ? "
+            "RETURNING next_number - 1", (session_id,),
+        ).fetchone()[0]
+
+    def _attach(self, c: sqlite3.Connection, photo: Photo, session_id: int) -> Photo:
+        number = self._number_for(c, session_id, photo.group_key, photo.id)
+        row = c.execute(
+            "UPDATE photos SET session_id = ?, session_number = ?, updated_at = ? "
+            "WHERE id = ? RETURNING *",
+            (session_id, number, utc_now(), photo.id),
+        ).fetchone()
+        return Photo(**dict(row))
+
+    def assign_session(self, photo_id: int, session_id: int | None) -> Photo:
+        """Change la session d'une photo pas encore téléchargée (état « detected »).
+
+        Pour une photo sauvegardée, il faut déplacer le fichier : voir cadt.sessions.move_photos.
+        """
+        with self.transaction() as c:
+            row = c.execute("SELECT * FROM photos WHERE id = ?", (photo_id,)).fetchone()
+            if row is None or row["state"] != "detected":
+                got = row["state"] if row else "introuvable"
+                raise InvalidTransition(f"photo {photo_id} : état {got}, attendu ('detected',)")
+            photo = Photo(**dict(row))
+            if session_id is None:
+                photo = Photo(**dict(c.execute(
+                    "UPDATE photos SET session_id = NULL, session_number = NULL, updated_at = ? "
+                    "WHERE id = ? RETURNING *", (utc_now(), photo_id)).fetchone()))
+            elif session_id != photo.session_id:
+                photo = self._attach(c, photo, session_id)
+            self._log(c, "session_assigned", photo_id, data={"session_id": session_id})
+            return photo
+
+    def next_number_in(self, session_id: int, photo: Photo) -> int:
+        """Numéro qu'aurait la photo dans cette session (réserve un numéro si besoin)."""
+        with self.transaction() as c:
+            if photo.session_id == session_id and photo.session_number is not None:
+                return photo.session_number
+            return self._number_for(c, session_id, photo.group_key, photo.id)
+
+    # ------------------------------------------------------------- déplacements
+
+    def begin_move(self, photo_id: int, dst: str, session_id: int | None,
+                   session_number: int | None) -> PendingMove:
+        """Étape 1 du déplacement : enregistre l'intention, AVANT de toucher au fichier."""
+        with self.transaction() as c:
+            row = c.execute("SELECT state, local_path FROM photos WHERE id = ?", (photo_id,)).fetchone()
+            if row is None or row["state"] not in SAVED_STATES:
+                got = row["state"] if row else "introuvable"
+                raise InvalidTransition(f"photo {photo_id} : état {got}, déplacement réservé aux photos sauvegardées")
+            if c.execute("SELECT 1 FROM pending_moves WHERE photo_id = ?", (photo_id,)).fetchone():
+                raise InvalidTransition(f"photo {photo_id} : déplacement déjà en cours")
+            r = c.execute(
+                "INSERT INTO pending_moves (photo_id, src, dst, session_id, session_number, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) RETURNING *",
+                (photo_id, row["local_path"], dst, session_id, session_number, utc_now()),
+            ).fetchone()
+            return PendingMove(**dict(r))
+
+    def finish_move(self, photo_id: int) -> Photo:
+        """Étape 3 : le fichier est à sa nouvelle place ; la base suit."""
+        with self.transaction() as c:
+            m = c.execute("SELECT * FROM pending_moves WHERE photo_id = ?", (photo_id,)).fetchone()
+            if m is None:
+                raise InvalidTransition(f"photo {photo_id} : aucun déplacement en cours")
+            row = c.execute(
+                "UPDATE photos SET local_path = ?, session_id = ?, session_number = ?, updated_at = ? "
+                "WHERE id = ? RETURNING *",
+                (m["dst"], m["session_id"], m["session_number"], utc_now(), photo_id),
+            ).fetchone()
+            c.execute("DELETE FROM pending_moves WHERE photo_id = ?", (photo_id,))
+            self._log(c, "moved", photo_id, data={"from": m["src"], "to": m["dst"],
+                                                   "session_id": m["session_id"]})
+            return Photo(**dict(row))
+
+    def cancel_move(self, photo_id: int, reason: str) -> None:
+        with self.transaction() as c:
+            c.execute("DELETE FROM pending_moves WHERE photo_id = ?", (photo_id,))
+            self._log(c, "move_cancelled", photo_id, reason)
+
+    def pending_moves(self) -> list[PendingMove]:
+        return [PendingMove(**dict(r))
+                for r in self.conn.execute("SELECT * FROM pending_moves ORDER BY photo_id")]
+
+    def path_owner(self, path: str, exclude_photo: int | None = None) -> int | None:
+        """Id de la photo qui occupe (ou va occuper) ce chemin, s'il y en a une."""
+        row = self.conn.execute(
+            "SELECT id FROM photos WHERE local_path = ? AND id IS NOT ? "
+            "UNION SELECT photo_id FROM pending_moves WHERE dst = ? AND photo_id IS NOT ? LIMIT 1",
+            (path, exclude_photo, path, exclude_photo),
+        ).fetchone()
+        return row[0] if row else None
 
     # ------------------------------------------------------------- tri
 

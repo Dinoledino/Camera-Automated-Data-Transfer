@@ -8,6 +8,7 @@ import pytest
 from cadt.db import (
     Database,
     HashMismatch,
+    SCHEMA_VERSION,
     InvalidTransition,
     classify_kind,
     make_group_key,
@@ -40,7 +41,7 @@ def verify(db, photo_id, sha=H1, path="/sd/x"):
 def test_pragmas_and_version(db):
     assert db.conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert db.conn.execute("PRAGMA synchronous").fetchone()[0] == 2  # FULL
-    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
 
 def test_reopen_keeps_data(tmp_path):
