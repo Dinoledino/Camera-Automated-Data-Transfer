@@ -57,6 +57,17 @@ class Watcher:
         self._known: set[tuple] = set()               # déjà enregistrés en base
         self._candidates: dict[tuple[str, str], tuple[tuple, int]] = {}  # (dossier, nom) → (clé, vu n fois)
 
+    def ignore_existing(self) -> int:
+        """Considère comme déjà traitées toutes les photos présentes maintenant sur l'appareil.
+
+        Pour la sonde : on ne veut sauvegarder que les photos prises pendant le test, pas
+        toute la carte. À ne pas utiliser en production (la carte entière doit être sauvegardée).
+        """
+        self.lister.refresh()
+        files = self.lister.list_files()
+        self._known.update(f.key for f in files)
+        return len(files)
+
     def poll_once(self) -> PollResult:
         """Un passage : liste, enregistre les fichiers stables, vide la file.
 
