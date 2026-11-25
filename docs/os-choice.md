@@ -30,12 +30,32 @@ Note : depuis fin 2026, postmarketOS est hébergé sous `nura.eco` (wiki.nura.ec
 - **2026-11-23 : `pmbootstrap build linux-samsung-a50` réussit** (pmbootstrap 3.12.1, canal edge, en 8 min sur un i5-9600KF). `gcc6-aarch64` est disponible précompilé : pas besoin de compiler le compilateur.
 - **vbmeta** : le `deviceinfo` de l'A50 ne déclare pas de partition vbmeta. Or, avec un bootloader déverrouillé, les Samsung de cette époque refusent de démarrer un boot.img modifié tant que vbmeta n'est pas neutralisé (erreur `vbmeta HASH_MISMATCH`, boucle en mode Download). Les portages Samsung comparables le déclarent : S10 Exynos `beyond1lte-downstream` (2019, heimdall) `deviceinfo_flash_heimdall_partition_vbmeta="VBMETA"`, et A21s.
   - Solution : `pmbootstrap flasher flash_vbmeta --partition VBMETA`. Cette commande génère avec `avbtool make_vbmeta_image --flags 2` une image vbmeta dont la vérification est désactivée, puis la flashe avec heimdall. Elle passe **avant** `flash_kernel`.
-  - **À VÉRIFIER** : le nom exact de la partition sur l'A50. En mode Download, lancer `heimdall print-pit --no-reboot | grep -i -A3 vbmeta`.
+  - **Vérifié le 2026-11-23** avec `heimdall print-pit` (sortie complète dans `docs/a50-pit.txt`). Blocs UFS de 4096 octets :
+    - `VBMETA` : 16 blocs, soit 64 Kio ;
+    - `BOOT` : 14 080 blocs, soit **55,0 Mio** (57 671 680 octets). Le `boot.img` OpenRC fait 50 784 256 octets : il reste environ 6,9 Mo de marge ;
+    - `USERDATA` : 0 bloc, c'est-à-dire tout l'espace restant du disque.
+  - Le mode Download s'identifie en USB comme `04e8:685d`. À la première tentative, la détection USB ne s'est pas terminée : il a fallu débrancher puis rebrancher le câble, le téléphone restant en mode Download.
 - Conséquence : l'option C est plus risquée que prévu (pas de maintenance, compilation complète). Elle reste peu coûteuse à essayer, car un retour au firmware d'origine reste possible.
+
+### Essai du 2026-11-23 : échec au démarrage
+Déroulé et pièges rencontrés :
+- `flash_vbmeta` échoue avec `avbtool: not found` : le chroot natif ne l'installe pas. Contournement : `pmbootstrap chroot -- apk add android-tools-avbtool`.
+- **heimdall échoue sur les gros envois vers `USERDATA`** : arrêt systématique vers 46 % en sparse et 16 % en raw, quels que soient le câble et le port. Une image d'environ 247 Mo passe. L'image a été réduite avec `ui none`, `install --no-recommends` et un minimum d'`extra_packages`. Il faut **supprimer réellement** `chroot_rootfs_samsung-a50` : `pmbootstrap zap` n'avait fait qu'arrêter le chroot.
+- Thor (alternative à heimdall) : le téléchargement du PIT échoue (timeout). Abandonné.
+- Après une session heimdall ratée, il faut redémarrer le téléphone en mode Download avant de réessayer. `--resume` ne sert que si la commande précédente a utilisé `--no-reboot` et a réussi.
+- Résultat : **boucle infinie sur les écrans d'avertissement**, sans aucun périphérique USB côté PC. Ni le passage de `os_version` / `os_patch_level` à 11.0.0 / 2023-03, ni le flash de notre propre DTB n'y changent rien.
+
+**Cause probable : KnoxGuard, pas le portage.** En mode Download : `KG STATE: Checking`, `Current Binary: Custom (0x307)`, `OEM LOCK: OFF (U)`. Le même comportement s'observe avec **TWRP officiel** (3.7.0_11-0-a505f) placé dans `BOOT`, alors que le `boot.img` d'origine, signé, démarre jusqu'au logo Samsung. Le bootloader accepte donc les flashs mais refuse de démarrer tout binaire non signé tant que KG n'est pas sorti de « Checking ». **À VÉRIFIER** : le portage pmOS pourrait démarrer une fois KG débloqué.
+
+Remise à l'origine : les images `boot`, `recovery`, `vbmeta` et `dt` ont été extraites de l'AP (archives `.lz4`, décompression en Python) et flashées avec heimdall. `SYSTEM` et `VENDOR` n'avaient jamais été modifiés.
+
+**Déblocage de KG en cours.** Sans Wi-Fi, le téléphone accède à Internet par USB grâce à [gnirehtet](https://github.com/Genymobile/gnirehtet) (`gnirehtet run`, puis accepter la demande de VPN sur le téléphone). Le client `kgclient` contacte les serveurs de Samsung dès qu'une connexion apparaît. Pour suivre son état sans passer en mode Download : `adb shell dumpsys knoxguard_service | grep -i vaultState`. `Prenormal` correspond à « Checking ».
+
+**Limite matérielle : Wi-Fi et Bluetooth hors service.** Wi-Fi : `Could not set interface flags for wlan0 (Invalid argument)`, puis `Failed to start legacy HAL`. Bluetooth : `Open h4 device failed: Invalid argument`, puis le service redémarre en boucle. Les firmwares (`/vendor/etc/wifi/mx140.bin`) sont intacts. Avant nos modifications, le Wi-Fi ne fonctionnait déjà qu'environ une fois sur cinq : c'est probablement la puce combo Wi-Fi/BT qui se dégrade. **Conséquence pour le projet : tout passe par USB**, aussi bien le D850 vers le téléphone que le PC vers le téléphone.
 
 | Test | Commande / méthode | Résultat | Notes |
 |---|---|---|---|
-| Démarrage | | | |
+| Démarrage | | ❌ | boucle d'avertissements, KG « Checking » |
 | USB networking (SSH depuis le PC) | `ssh user@172.16.42.1` | | |
 | Wi-Fi | `nmcli device wifi connect …` | | |
 | Charge et état de la batterie | `cat /sys/class/power_supply/*/uevent` | | |
