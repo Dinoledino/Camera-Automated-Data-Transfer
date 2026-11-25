@@ -277,3 +277,8 @@ def test_rating_and_flag(db):
         db.set_rating(p.id, 6)
     with pytest.raises(sqlite3.IntegrityError):
         db.set_flag(p.id, "maybe")
+
+
+def test_creates_missing_parent_folder(tmp_path):
+    with Database(tmp_path / "pas" / "encore" / "cadt.db") as d:
+        assert d.count_unsaved() == 0

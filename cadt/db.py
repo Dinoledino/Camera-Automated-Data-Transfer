@@ -135,6 +135,7 @@ def make_group_key(name: str, capture_time: str) -> str:
 class Database:
     def __init__(self, path: str | Path):
         self.path = str(path)
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)  # premier lancement : dossier absent
         # isolation_level=None : pas de transaction implicite, on les gère nous-mêmes.
         self.conn = sqlite3.connect(self.path, isolation_level=None, timeout=30)
         self.conn.row_factory = sqlite3.Row
