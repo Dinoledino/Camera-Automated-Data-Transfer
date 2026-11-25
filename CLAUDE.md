@@ -17,4 +17,4 @@ But : donner au Nikon D850 une sensation de « stockage infini ». Un ancien Sam
 4. Les points marqués « À VÉRIFIER » dans PLAN.md sont des hypothèses : teste-les avant de construire dessus.
 
 ## Stack visée
-Python 3 dans Termux (root), libgphoto2 / gphoto2 (ou bindings `python-gphoto2`), SQLite, exiftool, FastAPI pour l'interface web locale.
+Python 3 dans Termux (root), libgphoto2 / gphoto2 (ou bindings `python-gphoto2`), SQLite, exiftool, Starlette + Uvicorn + Jinja2 pour l'interface web locale (pas FastAPI : pydantic-core ne s'installe pas sur Termux).

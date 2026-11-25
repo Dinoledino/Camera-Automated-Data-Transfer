@@ -103,7 +103,7 @@ Le lien SD vers SD a été écarté : les deux lecteurs sont des hôtes, l'écri
                          │ indexeur : EXIF, aperçu (JpgFromRaw), miniature                      │
                          │    │                                                                │
                          │    ▼                                                                │
-                         │ interface web locale (FastAPI) : galerie, notes, suppression         │
+                         │ interface web locale (Starlette) : galerie, tri, corbeille           │
                          │ sync : Syncthing ou rsync vers le PC, avec vérification              │
                          └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -257,7 +257,11 @@ Les étapes ci-dessous valent pour les options A et B. Pour l'option C, remplace
 - Aperçu extrait du NEF (JpgFromRaw), puis miniature d'environ 400 px.
 - Regroupement de chaque RAW avec son JPEG, et regroupement par séance (photos séparées par plus de X minutes).
 
-### Phase 5 : interface de tri (FastAPI, ouverte dans le navigateur du téléphone)
+### Phase 5 : interface de tri (Starlette, ouverte dans le navigateur du téléphone)
+Starlette + Uvicorn + Jinja2, en pur Python, plutôt que FastAPI : sur l'A50 (Termux), pydantic-core
+n'existe pas précompilé et sa compilation Rust échoue (constaté le 2026-11-25). Starlette est la base
+de FastAPI, sans la validation pydantic, inutile ici. L'interface tourne dans un processus séparé du
+watcher : un plantage de l'interface n'interrompt jamais la sauvegarde.
 - Galerie avec un compteur bien visible : « N photos pas encore sauvegardées ».
 - Vue plein écran avec balayage, notes de 1 à 5, drapeau « garder » ou « rejeter ».
 - Effacement côté appareil automatique, juste après la vérification (voir CLAUDE.md, règle 2) : pas d'écran de suppression manuelle. Avant chaque effacement PTP, relire les informations du fichier sur l'appareil (nom, taille, date) et ne l'effacer que si elles sont identiques à la copie vérifiée. Après une coupure entre l'effacement et l'écriture en base (`delete_requested`), constater au redémarrage que le fichier a disparu de l'appareil et passer à `deleted_on_camera`.
