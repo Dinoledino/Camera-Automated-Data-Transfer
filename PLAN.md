@@ -29,8 +29,14 @@ Concrètement, faire de l'A50 un compagnon de prise de vue :
   les photos non copiées restent simplement sur la carte du D850, qui n'est effacée qu'après
   vérification. L'interface montre en permanence une **barre de mémoire utilisée** qui fait comprendre
   que la copie cessera quand elle sera pleine.
-- **Rejeter** : une étiquette, plus la possibilité de **supprimer du téléphone** les photos rejetées
-  pour regagner de la place, en deux temps (marquer, puis confirmer).
+- **Rejeter = vouloir supprimer**, en trois temps : (1) sélection (photo marquée « rejetée ») ;
+  (2) écran de confirmation (liste, place gagnée, avertissement : la photo n'est plus sur l'appareil
+  photo) ; (3) **corbeille** : photo récupérable jusqu'à l'extinction du téléphone ou pendant un délai
+  réglable (24 h par défaut), le premier des deux. « Extinction » = corbeille vidée au prochain
+  démarrage du téléphone (détecté par l'identifiant de démarrage du noyau, pas par un simple
+  redémarrage de l'application). Fichiers en corbeille déplacés (renommage atomique) dans un dossier
+  caché du même emplacement de stockage. Téléphone plein : la corbeille est vidée en premier, des plus
+  anciennes aux plus récentes, et le journal le signale.
 - **Usage terrain** : téléphone branché pendant toute la séance, ou branché pendant les pauses pour
   vider la carte : les deux doivent bien marcher (réactivité dans un cas, vitesse de vidange dans l'autre).
 - **Mode « Sauvegarde » du D850** (même photo sur les deux cartes) : les deux exemplaires sont effacés
