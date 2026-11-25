@@ -10,7 +10,11 @@ Ce qui est imité :
 - un fichier n'apparaît que complet (écrit à côté, puis renommé) ; l'option
   `atomic=False` l'écrit au contraire progressivement, pour tester les lectures
   d'un fichier pas encore terminé ;
-- date de modification = heure de prise de vue.
+- date de modification = heure de prise de vue ;
+- deux logements (slots=2) : store_00010001 (XQD) et store_00020001 (SD), comme les
+  voit le D850 en PTP, avec le rôle du logement 2 : « overflow » (débordement : tout sur
+  la carte 1), « backup » (sauvegarde : chaque fichier sur les deux cartes), « raw_jpeg »
+  (NEF sur la carte 1, JPEG sur la carte 2).
 
 Constats faits avec Directory Browse (libgphoto2 2.5.34, 2026-11-25) :
 - pas d'événement « nouvel objet » : seul le mode polling est testable avec ce pilote ;
@@ -46,6 +50,7 @@ _FILE_RE = re.compile(r"^DSC_(\d{4})\.(NEF|JPG)$", re.IGNORECASE)
 D850_RAW_SIZE = 50 * 1024 * 1024
 D850_JPEG_SIZE = 20 * 1024 * 1024
 TMP_DIR_NAME = ".sim-tmp"
+SLOT2_MODES = ("overflow", "backup", "raw_jpeg")
 
 
 @dataclass
@@ -62,6 +67,8 @@ class SimulatedCamera:
     raw_size: int = D850_RAW_SIZE
     jpeg_size: int | None = None          # None : RAW seul
     atomic: bool = True
+    slots: int = 1                        # 1 : DCIM à la racine ; 2 : store_00010001 et store_00020001
+    slot2_mode: str = "overflow"          # rôle du logement 2 (voir SLOT2_MODES)
     clock: Callable[[], datetime] = datetime.now
     sleep: Callable[[float], None] = time.sleep
     _base_block: bytes = field(default=b"", repr=False)
@@ -76,22 +83,26 @@ class SimulatedCamera:
 
     # ------------------------------------------------------------- état
 
+    def dcim(self, slot: int = 1) -> Path:
+        if self.slots == 1:
+            return self.card / "DCIM"
+        return self.card / f"store_{slot:04d}0001" / "DCIM"
+
     def _resume_from_card(self) -> None:
-        """Reprend la numérotation là où la carte s'est arrêtée (comme l'appareil)."""
-        dcim = self.card / "DCIM"
-        if not dcim.is_dir():
-            return
-        folders = sorted(int(m.group(1)) for d in dcim.iterdir()
-                         if d.is_dir() and (m := _FOLDER_RE.match(d.name)))
+        """Reprend la numérotation là où les cartes se sont arrêtées (comme l'appareil)."""
+        dcims = [d for d in (self.dcim(s) for s in range(1, self.slots + 1)) if d.is_dir()]
+        folders = sorted({int(m.group(1)) for dcim in dcims for d in dcim.iterdir()
+                          if d.is_dir() and (m := _FOLDER_RE.match(d.name))})
         if not folders:
             return
         self._folder = folders[-1]
-        numbers = sorted({int(m.group(1)) for f in (dcim / f"{self._folder}{FOLDER_SUFFIX}").iterdir()
-                          if (m := _FILE_RE.match(f.name))})
+        name = f"{self._folder}{FOLDER_SUFFIX}"
+        numbers = sorted({int(m.group(1)) for dcim in dcims if (dcim / name).is_dir()
+                          for f in (dcim / name).iterdir() if (m := _FILE_RE.match(f.name))})
         self._in_folder = len(numbers)
         self._number = numbers[-1] if numbers else 0
 
-    def _next_slot(self) -> tuple[int, Path]:
+    def _next_slot(self) -> tuple[int, str]:
         number = self._number + 1
         new_folder = self._in_folder >= MAX_PER_FOLDER
         if number > MAX_NUMBER:
@@ -103,9 +114,16 @@ class SimulatedCamera:
             self._in_folder = 0
         self._number = number
         self._in_folder += 1
-        folder = self.card / "DCIM" / f"{self._folder}{FOLDER_SUFFIX}"
-        folder.mkdir(parents=True, exist_ok=True)
-        return number, folder
+        return number, f"{self._folder}{FOLDER_SUFFIX}"
+
+    def _target_slots(self, ext: str) -> list[int]:
+        if self.slots == 1 or self.slot2_mode == "overflow":
+            return [1]
+        if self.slot2_mode == "backup":
+            return [1, 2]
+        if self.slot2_mode == "raw_jpeg":
+            return [1] if ext == "NEF" else [2]
+        raise ValueError(f"rôle du logement 2 inconnu : {self.slot2_mode}")
 
     # ------------------------------------------------------------- écriture
 
@@ -133,16 +151,22 @@ class SimulatedCamera:
             os.utime(path, (ts, ts))
 
     def shoot(self) -> Shot:
-        number, folder = self._next_slot()
+        if self.slot2_mode == "raw_jpeg" and self.jpeg_size is None:
+            raise ValueError("le mode raw_jpeg demande jpeg_size")
+        number, folder_name = self._next_slot()
         stamp = self.clock().replace(microsecond=0)
         files = []
         for ext, size in (("NEF", self.raw_size), ("JPG", self.jpeg_size)):
             if size is None:
                 continue
-            path = folder / f"DSC_{number:04d}.{ext}"
-            self._write(path, self._content(path.name, size, stamp), stamp)
-            files.append(path)
-        return Shot(number, folder, files, stamp)
+            name = f"DSC_{number:04d}.{ext}"
+            data = self._content(name, size, stamp)  # même contenu sur les deux cartes (sauvegarde)
+            for slot in self._target_slots(ext):
+                folder = self.dcim(slot) / folder_name
+                folder.mkdir(parents=True, exist_ok=True)
+                self._write(folder / name, data, stamp)
+                files.append(folder / name)
+        return Shot(number, files[0].parent, files, stamp)
 
     def burst(self, seconds: float, fps: float = 7.0) -> tuple[list[Shot], float]:
         """Rafale : renvoie (prises, retard max en secondes sur la cadence visée)."""

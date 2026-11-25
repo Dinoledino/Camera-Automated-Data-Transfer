@@ -41,6 +41,7 @@ import gphoto2 as gp
 
 from .db import Database
 from .downloader import Downloader, SourceError
+from . import gphoto_source
 from .gphoto_source import CameraFile, Gphoto2Source
 from .simulator import SimulatedCamera
 from .watcher import Watcher
@@ -92,6 +93,7 @@ class Context:
     simulator: SimulatedCamera | None
     shots: int = 5
     burst_seconds: float = 3.0
+    idle_seconds: float = 90.0   # au-delà du délai de veille du D850 (réglage perso c2)
     state: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -100,6 +102,19 @@ class Context:
 
     def result(self, step: str) -> dict[str, Any]:
         return self.state.get("steps", {}).get(step, {}).get("result", {})
+
+    def manual(self, instruction: str, sim_action: Callable[[], None] | None = None) -> bool:
+        """Demande une action à l'utilisateur sur l'appareil. False s'il choisit de la passer.
+
+        Avec le simulateur, `sim_action` fait l'action à sa place.
+        """
+        if self.simulator is not None:
+            self.ui.say(f"  (simulateur) {instruction}")
+            if sim_action:
+                sim_action()
+            return True
+        answer = self.ui.ask(f"  → {instruction}\n    Entrée quand c'est fait, ou « p » pour passer :", "")
+        return not answer.lower().startswith("p")
 
     def shoot(self, n: int, done: threading.Event, burst: bool = False) -> None:
         """Demande des prises de vue (ou les fait faire au simulateur)."""
@@ -193,9 +208,7 @@ def step_system(ctx: Context) -> dict[str, Any]:
 
 
 def autodetect() -> list[tuple[str, str]]:
-    """Appareils USB reconnus par libgphoto2 : [(modèle, port)]."""
-    found = gp.Camera.autodetect()
-    return [(found.get_name(i), found.get_value(i)) for i in range(len(found))]
+    return gphoto_source.autodetect()
 
 
 def step_detect(ctx: Context) -> dict[str, Any]:
@@ -232,13 +245,15 @@ def step_detect(ctx: Context) -> dict[str, Any]:
     return r
 
 
-def step_config(ctx: Context) -> dict[str, Any]:
-    """Lecture seule de la configuration : firmware, batterie, support d'enregistrement…"""
+def read_config(ctx: Context) -> dict[str, Any] | None:
+    """Tous les réglages lisibles, {chemin: valeur}, ou None si l'appareil ne le permet pas.
+
+    LECTURE SEULE : la sonde n'appelle jamais set_config.
+    """
     try:
         root = ctx.camera.get_config()
-    except gp.GPhoto2Error as e:
-        ctx.ui.say(f"  configuration non disponible ({e})")
-        return {"available": False, "error": str(e)}
+    except gp.GPhoto2Error:
+        return None
     values: dict[str, Any] = {}
 
     def walk(widget: Any, path: str) -> None:
@@ -254,6 +269,24 @@ def step_config(ctx: Context) -> dict[str, Any]:
                     values[name] = None
 
     walk(root, "")
+    return values
+
+
+def config_diff(before: dict[str, Any] | None, after: dict[str, Any] | None) -> dict[str, list[Any]]:
+    """Réglages qui ont changé : {chemin: [avant, après]} (les compteurs et l'heure sont ignorés)."""
+    if before is None or after is None:
+        return {}
+    noisy = ("datetime", "batterylevel", "free", "shots", "counter")
+    return {k: [before.get(k), v] for k, v in after.items()
+            if before.get(k) != v and not any(n in k.lower() for n in noisy)}
+
+
+def step_config(ctx: Context) -> dict[str, Any]:
+    """Lecture seule de la configuration : firmware, batterie, support d'enregistrement…"""
+    values = read_config(ctx)
+    if values is None:
+        ctx.ui.say("  configuration non disponible avec cet appareil ou ce pilote")
+        return {"available": False}
     (ctx.out_dir / "camera_config.json").write_text(json.dumps(values, indent=1, ensure_ascii=False))
     interesting = {k: v for k, v in values.items()
                    if any(s in k.lower() for s in ("deviceversion", "serialnumber", "batterylevel",
@@ -438,6 +471,163 @@ def step_burst(ctx: Context) -> dict[str, Any]:
     return r
 
 
+def shoot_and_collect(ctx: Context, n: int) -> list[CameraFile]:
+    """Fait prendre n photos et renvoie les fichiers apparus (liste relue après reconnexion)."""
+    ctx.source.refresh()
+    before = {(f.folder, f.name, f.size) for f in ctx.source.list_files()}
+    done = threading.Event()
+    ctx.shoot(n, done)
+    done.wait(timeout=600)
+    time.sleep(0.5)
+    ctx.source.refresh()
+    return [f for f in ctx.source.list_files() if (f.folder, f.name, f.size) not in before]
+
+
+SLOT2_CHOICES = [
+    ("overflow", "Débordement (tout va sur la carte 1 ; la 2 ne sert que quand la 1 est pleine)"),
+    ("backup", "Sauvegarde (chaque photo est écrite sur les deux cartes)"),
+    ("raw_jpeg", "RAW logement 1 – JPEG logement 2 (qualité d'image réglée sur NEF + JPEG)"),
+]
+
+
+def step_slots(ctx: Context) -> dict[str, Any]:
+    """Rôle du 2e logement : où vont les fichiers, et les doublons de la sauvegarde sont-ils reconnus ?"""
+    storages = [s.get("basedir") for s in ctx.result("storage").get("storages", []) if "basedir" in s]
+    if ctx.simulator is None and len(storages) < 2:
+        ctx.ui.say(f"  une seule carte vue ({storages}) : mets une carte dans chaque logement pour cette étape")
+    sim = ctx.simulator
+    initial_mode = sim.slot2_mode if sim else None
+    modes: dict[str, Any] = {}
+    for mode, label in SLOT2_CHOICES:
+        cfg_before = read_config(ctx)
+        if not ctx.manual(f"Règle le rôle du logement 2 sur « {label} » (menu Prise de vue photo).",
+                          (lambda m=mode: setattr(sim, "slot2_mode", m)) if sim else None):
+            modes[mode] = {"skipped": True}
+            continue
+        changed = config_diff(cfg_before, read_config(ctx))
+        new = shoot_and_collect(ctx, 2)
+        by_storage: dict[str, list[str]] = {}
+        for f in new:
+            by_storage.setdefault(f.storage_id or "?", []).append(f.name)
+        keys = {f.key for f in new}
+        stores_per_key = {k: {f.storage_id for f in new if f.key == k} for k in keys}
+        if mode == "backup":
+            expected = bool(keys) and all(len(v) == 2 for v in stores_per_key.values())
+        elif mode == "raw_jpeg":
+            nef = {f.storage_id for f in new if f.name.upper().endswith(".NEF")}
+            jpg = {f.storage_id for f in new if f.name.upper().endswith(".JPG")}
+            expected = len(nef) == 1 and len(jpg) == 1 and nef != jpg
+        else:
+            expected = bool(new) and len(by_storage) == 1
+        modes[mode] = {
+            "files": len(new),
+            "distinct_photos": len(keys),
+            "by_storage": {k: sorted(v) for k, v in by_storage.items()},
+            "identical_copies_on_both_cards": sum(len(v) == 2 for v in stores_per_key.values()),
+            "as_expected": expected,
+            "config_changes": changed,
+        }
+        ctx.ui.say(f"  {mode} : {len(new)} fichiers, {len(keys)} photos distinctes, "
+                   f"par carte {modes[mode]['by_storage']} → {'conforme' if expected else 'INATTENDU'}")
+        if changed:
+            ctx.ui.say(f"    réglage(s) modifié(s) vu(s) par gphoto2 : {', '.join(changed)}")
+    if sim:
+        sim.slot2_mode = initial_mode
+    else:
+        ctx.ui.say("  Remets le rôle du logement 2 que tu veux utiliser pour tes séances.")
+    return {"storages": storages, "modes": modes}
+
+
+def _try(label: str, fn: Callable[[], Any]) -> dict[str, Any]:
+    t = time.monotonic()
+    try:
+        value = fn()
+        return {"ok": True, "seconds": round(time.monotonic() - t, 3), "value": value}
+    except (SourceError, gp.GPhoto2Error) as e:
+        return {"ok": False, "seconds": round(time.monotonic() - t, 3), "error": f"{type(e).__name__}: {e}"}
+
+
+def _read_first_chunk(ctx: Context) -> int:
+    files = ctx.source.list_files()
+    f = _pick(files, ".JPG") or _pick(files, ".NEF")
+    if f is None:
+        return 0
+    chunks = ctx.source.iter_chunks(f.folder, f.name)
+    try:
+        return len(next(iter(chunks)))
+    finally:
+        getattr(chunks, "close", lambda: None)()
+
+
+def step_power(ctx: Context) -> dict[str, Any]:
+    """La session USB survit-elle à la mise en veille ? Et à un arrêt / redémarrage de l'appareil ?"""
+    r: dict[str, Any] = {"idle_seconds": ctx.idle_seconds}
+    ctx.ui.say(f"  Ne touche plus à l'appareil pendant {ctx.idle_seconds:g} s : il va se mettre en veille.")
+    time.sleep(ctx.idle_seconds)
+    r["after_idle"] = {
+        "list_cached": _try("liste", lambda: len(ctx.source.list_files())),
+        "reconnect_and_list": _try("reconnexion", lambda: (ctx.source.refresh(), len(ctx.source.list_files()))[1]),
+        "read": _try("lecture", lambda: _read_first_chunk(ctx)),
+    }
+    ok = all(v["ok"] for v in r["after_idle"].values())
+    ctx.ui.say(f"  après {ctx.idle_seconds:g} s sans y toucher : "
+               + ", ".join(f"{k} {'OK' if v['ok'] else 'ÉCHEC'}" for k, v in r["after_idle"].items()))
+
+    if ctx.simulator is not None:
+        r["power_cycle"] = {"applicable": False, "reason": "simulateur"}
+        return r
+    port_before = ctx.source.port
+    if not ctx.manual("Éteins l'appareil (interrupteur sur OFF)."):
+        r["power_cycle"] = {"skipped": True}
+        return r
+    r["power_cycle"] = {"while_off": _try("reconnexion", ctx.source.refresh)}
+    if not ctx.manual("Rallume l'appareil."):
+        r["power_cycle"]["skipped_power_on"] = True
+        return r
+    t0 = time.monotonic()
+    attempt: dict[str, Any] = {"ok": False}
+    while time.monotonic() - t0 < 60:
+        attempt = _try("reconnexion", ctx.source.refresh)
+        if attempt["ok"]:
+            break
+        time.sleep(1)
+    detected = autodetect()
+    r["power_cycle"].update({
+        "reconnected": attempt["ok"],
+        "seconds_to_reconnect": round(time.monotonic() - t0, 1),
+        "last_attempt": attempt,
+        "port_before": port_before,
+        "port_after": ctx.source.port,
+        "detected_after": detected,
+    })
+    ctx.ui.say(f"  après rallumage : {'reconnecté' if attempt['ok'] else 'PAS reconnecté'} "
+               f"en {r['power_cycle']['seconds_to_reconnect']} s ; port {port_before} → {ctx.source.port}")
+    if not ok or not attempt["ok"]:
+        raise StepFailed("la session USB ne survit pas à la veille ou au redémarrage (détails dans le rapport)")
+    return r
+
+
+def step_bluetooth(ctx: Context) -> dict[str, Any]:
+    """SnapBridge (Bluetooth) actif gêne-t-il l'USB ?"""
+    if ctx.simulator is not None:
+        return {"applicable": False, "reason": "simulateur"}
+    was_on = ctx.ui.confirm("  SnapBridge / Bluetooth est-il actuellement activé sur l'appareil ?", False)
+    r: dict[str, Any] = {"initially_on": was_on}
+    if not was_on and not ctx.manual("Active la connexion Bluetooth (menu Configuration, SnapBridge / Bluetooth)."):
+        return {**r, "skipped": True}
+    r["with_bluetooth"] = {
+        "reconnect_and_list": _try("liste", lambda: (ctx.source.refresh(), len(ctx.source.list_files()))[1]),
+        "new_photos": _try("prise de vue", lambda: len(shoot_and_collect(ctx, 2))),
+    }
+    ctx.ui.say("  avec Bluetooth : " + ", ".join(
+        f"{k} {'OK' if v['ok'] else 'ÉCHEC'}" for k, v in r["with_bluetooth"].items()))
+    if not was_on:
+        ctx.manual("Tu peux désactiver de nouveau le Bluetooth.")
+    r["usb_unaffected"] = all(v["ok"] for v in r["with_bluetooth"].values()) and \
+        r["with_bluetooth"]["new_photos"].get("value", 0) > 0
+    return r
+
+
 STEPS = [
     Step("system", "Informations système", step_system),
     Step("detect", "Détection de l'appareil", step_detect),
@@ -446,6 +636,9 @@ STEPS = [
     Step("read", "Lecture d'un NEF et d'un JPEG : débit et cohérence", step_read),
     Step("detection", "Déclenchement pendant le branchement, détection des nouvelles photos", step_detection),
     Step("burst", "Rafale réelle et vidange", step_burst),
+    Step("slots", "Rôle du 2e logement : débordement, sauvegarde, RAW + JPEG", step_slots),
+    Step("power", "Mise en veille, arrêt et redémarrage de l'appareil", step_power),
+    Step("bluetooth", "SnapBridge / Bluetooth activé", step_bluetooth),
 ]
 
 
@@ -510,6 +703,8 @@ def recommend(state: dict[str, Any]) -> dict[str, Any]:
             "stable_polls": 2,
         },
         "download": {"partial_reads": bool(read.get("partial_reads_supported"))},
+        "slots": {f"{m}_ok": v.get("as_expected") for m, v in res("slots").get("modes", {}).items()
+                  if not v.get("skipped")},
     }
 
 
@@ -568,6 +763,26 @@ def _summary(step_id: str, e: dict[str, Any]) -> str:
     if step_id == "detection":
         return (f"{r['new_files_after_refresh']} nouvelles photos, "
                 f"{r['file_added_events']} événements, sans reconnexion : {r['new_files_without_refresh']}")
+    if step_id == "slots":
+        parts = []
+        for m, v in r.get("modes", {}).items():
+            parts.append(f"{m} : passé" if v.get("skipped") else
+                         f"{m} {'✅' if v['as_expected'] else '❌'} "
+                         + "(" + ", ".join(f"{k} : {len(n)}" for k, n in v["by_storage"].items()) + ")")
+        return " ; ".join(parts)
+    if step_id == "power":
+        idle = ", ".join(f"{k} {'OK' if v['ok'] else 'échec'}" for k, v in r["after_idle"].items())
+        pc = r.get("power_cycle", {})
+        if pc.get("applicable") is False or pc.get("skipped"):
+            cycle = "arrêt/redémarrage non testé"
+        else:
+            cycle = (f"reconnecté en {pc.get('seconds_to_reconnect')} s" if pc.get("reconnected")
+                     else "PAS reconnecté après redémarrage")
+        return f"après veille : {idle} ; {cycle}"
+    if step_id == "bluetooth":
+        if r.get("applicable") is False or r.get("skipped"):
+            return "non testé"
+        return "USB non perturbé" if r.get("usb_unaffected") else "USB PERTURBÉ avec Bluetooth actif"
     if step_id == "burst":
         return (f"{r['verified']}/{r['photos']} vérifiées, {r['mb_per_s_download']} Mo/s, "
                 f"vidange après la rafale {r['drain_after_burst_seconds']} s")
@@ -585,19 +800,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--auto", action="store_true", help="répondre aux questions par défaut (tests)")
     p.add_argument("--shots", type=int, default=5, help="photos à prendre à l'étape de détection")
     p.add_argument("--burst", type=float, default=3.0, help="durée de la rafale, en secondes")
+    p.add_argument("--idle", type=float, default=90.0,
+                   help="secondes sans toucher l'appareil pour le test de mise en veille")
     p.add_argument("--sim-raw-size", type=int, default=5 * 1024 * 1024, help="taille d'un NEF simulé")
     args = p.parse_args(argv)
 
     args.out.mkdir(parents=True, exist_ok=True)
     simulator = None
     if args.card:
-        simulator = SimulatedCamera(args.card, raw_size=args.sim_raw_size, jpeg_size=args.sim_raw_size // 4)
-        if not any(args.card.glob("DCIM/*/DSC_*")):
+        simulator = SimulatedCamera(args.card, raw_size=args.sim_raw_size, jpeg_size=args.sim_raw_size // 4,
+                                    slots=2)
+        if not any(args.card.glob("store_*/DCIM/*/DSC_*")):
             simulator.shoot()  # la carte doit contenir au moins une photo pour l'étape de lecture
         source = Gphoto2Source.directory(str(args.card))
     else:
         source = Gphoto2Source()
-    ctx = Context(args.out, Ui(auto=args.auto), source, simulator, shots=args.shots, burst_seconds=args.burst)
+    ctx = Context(args.out, Ui(auto=args.auto), source, simulator, shots=args.shots,
+                  burst_seconds=args.burst, idle_seconds=args.idle)
     try:
         state = run_probe(ctx, start_from=args.start_from, redo=args.redo)
     finally:

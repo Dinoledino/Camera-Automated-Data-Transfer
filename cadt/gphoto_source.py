@@ -51,6 +51,12 @@ class CameraFile:
         return (self.name, self.size, self.capture_time)
 
 
+def autodetect() -> list[tuple[str, str]]:
+    """Appareils USB reconnus par libgphoto2 : [(modèle, port)]."""
+    found = gp.Camera.autodetect()
+    return [(found.get_name(i), found.get_value(i)) for i in range(len(found))]
+
+
 def _translate(e: gp.GPhoto2Error, what: str) -> SourceError:
     if e.code == gp.GP_ERROR_CAMERA_BUSY:
         return SourceBusy(f"{what} : appareil occupé")
@@ -88,8 +94,22 @@ class Gphoto2Source:
                 camera.set_port_info(ports[ports.lookup_path(self.port)])
             camera.init()
         except gp.GPhoto2Error as e:
-            raise SourceDisconnected(f"connexion impossible : {e}") from e
+            # Après un débranchement ou un redémarrage de l'appareil, le port USB change
+            # souvent (usb:001,008 → usb:001,009) : on cherche le même modèle ailleurs.
+            moved = self._find_moved_port()
+            if moved is None:
+                raise SourceDisconnected(f"connexion impossible : {e}") from e
+            self.port = moved
+            return self.connect()
         self.camera = camera
+
+    def _find_moved_port(self) -> str | None:
+        if not self.model or not self.port or not self.port.startswith("usb:"):
+            return None
+        for model, port in autodetect():
+            if model == self.model and port != self.port:
+                return port
+        return None
 
     def close(self) -> None:
         if self.camera is not None:

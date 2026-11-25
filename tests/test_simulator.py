@@ -106,3 +106,41 @@ def test_directory_browse_sees_simulated_card(tmp_path):
         assert bytes(memoryview(data.get_data_and_size())) == (c.card / "DCIM/100NC850/DSC_0002.NEF").read_bytes()
     finally:
         camera.exit()
+
+
+# ------------------------------------------------------------------ deux logements
+
+def two(tmp_path, mode):
+    return cam(tmp_path, jpeg_size=500, slots=2, slot2_mode=mode)
+
+
+def rel(tmp_path, shot):
+    return sorted(str(f.relative_to(tmp_path / "card")) for f in shot.files)
+
+
+def test_slot2_overflow(tmp_path):
+    assert rel(tmp_path, two(tmp_path, "overflow").shoot()) == [
+        "store_00010001/DCIM/100NC850/DSC_0001.JPG", "store_00010001/DCIM/100NC850/DSC_0001.NEF"]
+
+
+def test_slot2_backup_writes_identical_copies(tmp_path):
+    s = two(tmp_path, "backup").shoot()
+    assert rel(tmp_path, s) == [
+        "store_00010001/DCIM/100NC850/DSC_0001.JPG", "store_00010001/DCIM/100NC850/DSC_0001.NEF",
+        "store_00020001/DCIM/100NC850/DSC_0001.JPG", "store_00020001/DCIM/100NC850/DSC_0001.NEF"]
+    card = tmp_path / "card"
+    assert (card / "store_00010001/DCIM/100NC850/DSC_0001.NEF").read_bytes() == \
+           (card / "store_00020001/DCIM/100NC850/DSC_0001.NEF").read_bytes()
+
+
+def test_slot2_raw_jpeg_splits_by_type(tmp_path):
+    assert rel(tmp_path, two(tmp_path, "raw_jpeg").shoot()) == [
+        "store_00010001/DCIM/100NC850/DSC_0001.NEF", "store_00020001/DCIM/100NC850/DSC_0001.JPG"]
+
+
+def test_mode_can_change_between_shots_and_numbering_continues(tmp_path):
+    c = two(tmp_path, "overflow")
+    c.shoot()
+    c.slot2_mode = "raw_jpeg"
+    assert c.shoot().number == 2
+    assert two(tmp_path, "overflow").shoot().number == 3  # reprise en lisant les deux cartes

@@ -9,7 +9,7 @@ from cadt import probe  # noqa: E402
 
 def run(tmp_path, *extra):
     return probe.main(["--out", str(tmp_path / "out"), "--card", str(tmp_path / "card"), "--auto",
-                       "--shots", "2", "--burst", "0.5", "--sim-raw-size", "200000", *extra])
+                       "--shots", "2", "--burst", "0.5", "--sim-raw-size", "200000", "--idle", "0.2", *extra])
 
 
 def state(tmp_path):
@@ -31,6 +31,14 @@ def test_full_probe_against_simulator(tmp_path, capsys):
     assert "| Rafale réelle et vidange | ✅ |" in (out / "probe_report.md").read_text()
     assert (out / "logs" / "02-detect.log").stat().st_size > 0
     assert not (out / "burst" / "sd").exists()  # la sonde ne garde pas de copies
+    modes = s["steps"]["slots"]["result"]["modes"]
+    assert all(m["as_expected"] for m in modes.values())
+    assert modes["backup"]["files"] == 2 * modes["backup"]["distinct_photos"]  # même photo sur 2 cartes
+    assert "backup_ok = true" in rec
+    power = s["steps"]["power"]["result"]
+    assert all(v["ok"] for v in power["after_idle"].values())
+    assert power["power_cycle"]["applicable"] is False
+    assert s["steps"]["bluetooth"]["result"]["applicable"] is False
 
 
 def test_resume_skips_successful_steps(tmp_path, capsys):
