@@ -3,7 +3,7 @@
 Contexte pour Claude Code. Le plan détaillé est dans `PLAN.md` : lis-le avant toute chose et suis l'ordre des phases.
 
 ## En bref
-Un ancien Samsung Galaxy A50 (rooté, Termux) sert de stockage de sauvegarde et d'outil de tri pour un Nikon D850, relié en USB (OTG). Les photos sont récupérées au fur et à mesure de la prise de vue, vérifiées (SHA-256), indexées (SQLite), puis triables et supprimables depuis le téléphone.
+But : donner au Nikon D850 une sensation de « stockage infini ». Un ancien Samsung Galaxy A50, relié en USB (OTG), récupère les photos au fur et à mesure de la prise de vue, les vérifie (SHA-256), les efface de la carte du D850 pour la libérer, les indexe (SQLite) et offre une interface pour les trier et les gérer. Le système du téléphone est en cours de choix (voir docs/os-choice.md). Retouche et « stockage infini » plus poussé : plus tard, sur un autre appareil.
 
 ## Utilisateur
 - Étudiant en informatique, à l'aise avec le code. Réponds en français.

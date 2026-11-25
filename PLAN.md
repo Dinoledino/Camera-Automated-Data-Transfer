@@ -2,7 +2,16 @@
 
 ## 1. Objectif
 
-Faire de l'A50 un compagnon de prise de vue :
+**Vision (précisée le 2026-11-25) : donner au D850 une sensation de « stockage infini ».** Les cartes
+du D850 se remplissent vite et son interface ne permet pas de gérer les photos confortablement. Le
+dispositif décharge la carte au fil de la prise de vue et offre une vraie interface de tri et de gestion.
+
+- **Périmètre actuel (A50)** : récupérer les photos du D850 pour libérer sa carte, et proposer une
+  interface pour trier et gérer les photos.
+- **Plus tard (autre appareil, ou extensions)** : pousser plus loin le « stockage infini », et peut-être
+  retoucher les photos avec des logiciels performants.
+
+Concrètement, faire de l'A50 un compagnon de prise de vue :
 - **Sauvegarde au fil de l'eau** : chaque photo prise par le D850 est copiée sur le téléphone dès que possible, pendant la séance.
 - **Vérification** : chaque copie est contrôlée par SHA-256 avant d'être considérée comme sûre.
 - **Libération de la carte** : chaque photo est effacée de la carte du D850 dès que sa copie est vérifiée (décision du 2026-11-25).
