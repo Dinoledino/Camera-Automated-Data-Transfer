@@ -20,10 +20,11 @@ import errno
 import hashlib
 import os
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable, Iterator, Protocol
+from typing import Callable, Iterable, Iterator, Protocol
 
-from .db import Database, HashMismatch, Photo
+from .db import Database, HashMismatch, Photo, iso_utc
 from .fsutil import CHUNK_SIZE, remove_quietly, fsync_dir, sha256_file
 from .sessions import download_path, recover_moves
 
@@ -83,13 +84,41 @@ class Outcome:
     error: str | None = None
 
 
+# ------------------------------------------------------------------ politique
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """Délai avant nouvelle tentative : base × facteur^(n-1), plafonné ; abandon après max_attempts.
+
+    Avec les valeurs par défaut : 5 s, 15 s, 45 s, 2 min 15, puis abandon à la 5e erreur.
+    """
+    max_attempts: int = 5
+    base_delay: float = 5.0
+    factor: float = 3.0
+    max_delay: float = 600.0
+
+    def delay(self, attempts: int) -> float:
+        return min(self.base_delay * self.factor ** max(attempts - 1, 0), self.max_delay)
+
+    def gives_up(self, attempts: int) -> bool:
+        return attempts >= self.max_attempts
+
+
+def _utc_clock() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 # ------------------------------------------------------------------ downloader
 
 class Downloader:
-    def __init__(self, db: Database, source: Source, dest_root: str | Path):
+    def __init__(self, db: Database, source: Source, dest_root: str | Path,
+                 policy: RetryPolicy = RetryPolicy(),
+                 clock: Callable[[], datetime] = _utc_clock):
         self.db = db
         self.source = source
         self.dest_root = Path(dest_root)
+        self.policy = policy
+        self.clock = clock  # remplaçable dans les tests
 
     # ---------------------------------------------------------- chemins
 
@@ -143,7 +172,8 @@ class Downloader:
                 try:
                     self.db.mark_verified(photo.id, str(final), reread)
                 except HashMismatch as e:
-                    return Outcome(self.db.get(photo.id), False, str(e))
+                    retry_at, give_up = self._retry_plan(photo)
+                    return Outcome(self.db.schedule_retry(photo.id, retry_at, give_up), False, str(e))
                 raise AssertionError("mark_verified aurait dû lever HashMismatch")
 
             os.replace(part, final)
@@ -151,11 +181,12 @@ class Downloader:
             return Outcome(self.db.mark_verified(photo.id, str(final), reread), True)
 
         except SourceDisconnected as e:
-            self._fail(photo, part, f"appareil déconnecté : {e}")
+            # Pas la faute de la photo : ni pénalité ni délai, elle repart au rebranchement.
+            self._fail(photo, part, f"appareil déconnecté : {e}", blame_photo=False)
             raise
         except OSError as e:
             if e.errno in (errno.ENOSPC, errno.EDQUOT):
-                self._fail(photo, part, "microSD pleine")
+                self._fail(photo, part, "microSD pleine", blame_photo=False)
                 raise DiskFull(str(e)) from e
             self._fail(photo, part, f"erreur disque : {e}")
             raise
@@ -177,27 +208,37 @@ class Downloader:
             raise SourceError(f"taille reçue {written} octets, attendue {photo.size}")
         return h.hexdigest()
 
-    def _fail(self, photo: Photo, part: Path, error: str) -> Photo:
+    def _retry_plan(self, photo: Photo) -> tuple[str | None, bool]:
+        """(heure de la prochaine tentative, abandon ?) après l'échec n° photo.attempts."""
+        if self.policy.gives_up(photo.attempts):
+            return None, True
+        when = self.clock() + timedelta(seconds=self.policy.delay(photo.attempts))
+        return iso_utc(when), False
+
+    def _fail(self, photo: Photo, part: Path, error: str, blame_photo: bool = True) -> Photo:
         remove_quietly(part)
-        return self.db.mark_failed(photo.id, error)
+        if not blame_photo:
+            return self.db.mark_failed(photo.id, error, count_attempt=False)
+        retry_at, give_up = self._retry_plan(photo)
+        return self.db.mark_failed(photo.id, error, retry_at=retry_at, give_up=give_up)
 
     # ---------------------------------------------------------- la file
 
-    def drain(self, max_attempts: int = 5) -> list[Outcome]:
-        """Vide la file jusqu'à ce qu'elle soit vide.
+    def drain(self) -> list[Outcome]:
+        """Télécharge tout ce qui est prêt dans la file, puis rend la main.
 
-        S'arrête sur SourceDisconnected ou DiskFull (propagées à l'appelant).
-        Une photo qui a déjà échoué max_attempts fois est laissée de côté (journalisée),
-        pour ne pas bloquer les suivantes : elle reste « detected » et non sauvegardée.
+        Les photos en attente de nouvelle tentative sont laissées pour plus tard :
+        `seconds_until_next_retry()` dit quand revenir. S'arrête sur SourceDisconnected
+        ou DiskFull (propagées à l'appelant).
         """
         outcomes: list[Outcome] = []
-        skipped: set[int] = set()
-        while True:
-            photo = self.db.claim_next(exclude=skipped)
-            if photo is None:
-                return outcomes
-            if photo.attempts > max_attempts:
-                self.db.mark_failed(photo.id, f"abandonnée après {max_attempts} tentatives")
-                skipped.add(photo.id)
-                continue
+        while (photo := self.db.claim_next(now=iso_utc(self.clock()))) is not None:
             outcomes.append(self.download(photo))
+        return outcomes
+
+    def seconds_until_next_retry(self) -> float | None:
+        """None s'il n'y a aucune nouvelle tentative programmée."""
+        nxt = self.db.next_retry_at()
+        if nxt is None:
+            return None
+        return max((datetime.fromisoformat(nxt) - self.clock()).total_seconds(), 0.0)

@@ -20,7 +20,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _SCHEMA_FILE = Path(__file__).with_name("schema.sql")  # version 1
 _MIGRATIONS_DIR = Path(__file__).with_name("migrations")  # NNN_<nom>.sql → version NNN
 
@@ -63,6 +63,9 @@ class Photo:
     updated_at: str
     session_id: int | None = None
     session_number: int | None = None
+    next_attempt_at: str | None = None
+    given_up_at: str | None = None
+    priority: int = 0
 
     @property
     def is_saved(self) -> bool:
@@ -98,7 +101,12 @@ def slugify(name: str) -> str:
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return iso_utc(datetime.now(timezone.utc))
+
+
+def iso_utc(moment: datetime) -> str:
+    """Format unique des horodatages UTC : comparable directement comme texte en SQL."""
+    return moment.astimezone(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def classify_kind(name: str) -> str:
@@ -256,31 +264,42 @@ class Database:
 
     # ------------------------------------------------------------- file
 
-    def claim_next(self, exclude: Iterable[int] = ()) -> Photo | None:
-        """Prend atomiquement la prochaine photo à télécharger : JPEG > RAW > autres, puis chronologique.
+    def claim_next(self, now: str | None = None) -> Photo | None:
+        """Prend atomiquement la prochaine photo à télécharger.
 
-        exclude : ids à ignorer (par exemple les photos abandonnées après trop d'échecs).
+        Ordre : priorité manuelle, puis JPEG > RAW > autres, puis ordre chronologique.
+        Sont ignorées : les photos abandonnées, et celles dont le délai avant
+        nouvelle tentative (next_attempt_at) n'est pas écoulé.
         """
-        excluded = list(exclude)
-        not_in = f"AND id NOT IN ({','.join('?' * len(excluded))})" if excluded else ""
+        now = now or utc_now()
         with self.transaction() as c:
             row = c.execute(
-                f"""UPDATE photos
-                   SET state = 'downloading', attempts = attempts + 1, updated_at = ?
+                """UPDATE photos
+                   SET state = 'downloading', attempts = attempts + 1,
+                       next_attempt_at = NULL, updated_at = ?
                    WHERE id = (
                        SELECT id FROM photos
-                       WHERE state = 'detected' {not_in}
-                       ORDER BY CASE kind WHEN 'jpeg' THEN 0 WHEN 'raw' THEN 1 ELSE 2 END,
+                       WHERE state = 'detected' AND given_up_at IS NULL
+                         AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                       ORDER BY priority DESC,
+                                CASE kind WHEN 'jpeg' THEN 0 WHEN 'raw' THEN 1 ELSE 2 END,
                                 capture_time, id
                        LIMIT 1)
                    RETURNING *""",
-                (utc_now(), *excluded),
+                (now, now),
             ).fetchone()
             if row is None:
                 return None
             photo = Photo(**dict(row))
             self._log(c, "download_started", photo.id, data={"attempt": photo.attempts})
             return photo
+
+    def next_retry_at(self) -> str | None:
+        """Heure de la prochaine tentative programmée (pour savoir combien de temps dormir)."""
+        return self.conn.execute(
+            "SELECT min(next_attempt_at) FROM photos "
+            "WHERE state = 'detected' AND given_up_at IS NULL AND next_attempt_at IS NOT NULL"
+        ).fetchone()[0]
 
     def mark_downloaded(self, photo_id: int, sha256: str) -> Photo:
         """Le .part est écrit et fsync ; sha256 = hash calculé pendant le téléchargement."""
@@ -317,13 +336,85 @@ class Database:
                 return photo
         raise mismatch
 
-    def mark_failed(self, photo_id: int, error: str) -> Photo:
-        """Échec pendant le téléchargement : la photo retourne dans la file."""
+    def mark_failed(self, photo_id: int, error: str, retry_at: str | None = None,
+                    give_up: bool = False, count_attempt: bool = True) -> Photo:
+        """Échec pendant le téléchargement : la photo retourne dans la file.
+
+        retry_at      : pas de nouvelle tentative avant cette heure (None : tout de suite).
+        give_up       : la photo sort de la file (reste non sauvegardée, relance manuelle).
+        count_attempt : False quand l'échec ne vient pas de la photo (appareil débranché,
+                        carte pleine) : la tentative n'est pas comptée.
+        """
         with self.transaction() as c:
-            photo = self._transition(c, photo_id, ("downloading", "downloaded"),
-                                     "state = 'detected', sha256 = NULL, last_error = ?", (error,))
-            self._log(c, "error", photo_id, error)
+            photo = self._transition(
+                c, photo_id, ("downloading", "downloaded"),
+                "state = 'detected', sha256 = NULL, last_error = ?, next_attempt_at = ?, "
+                "attempts = attempts - ?",
+                (error, retry_at, 0 if count_attempt else 1))
+            self._log(c, "error", photo_id, error,
+                      data={"retry_at": retry_at, "counted": count_attempt})
+            if give_up:
+                photo = self._give_up(c, photo)
             return photo
+
+    def schedule_retry(self, photo_id: int, retry_at: str | None, give_up: bool = False) -> Photo:
+        """Applique la politique de nouvelle tentative à une photo déjà revenue en « detected »
+        (par exemple après un hash différent à la relecture)."""
+        with self.transaction() as c:
+            photo = self._transition(c, photo_id, ("detected",), "next_attempt_at = ?", (retry_at,))
+            if give_up:
+                photo = self._give_up(c, photo)
+            return photo
+
+    def _give_up(self, c: sqlite3.Connection, photo: Photo) -> Photo:
+        row = c.execute(
+            "UPDATE photos SET given_up_at = ?, next_attempt_at = NULL WHERE id = ? RETURNING *",
+            (utc_now(), photo.id),
+        ).fetchone()
+        self._log(c, "given_up", photo.id, data={"attempts": photo.attempts,
+                                                 "last_error": photo.last_error})
+        return Photo(**dict(row))
+
+    def retry(self, photo_ids: Iterable[int] | None = None) -> int:
+        """Relance manuelle des photos abandonnées (toutes si photo_ids est None).
+
+        Leur compteur de tentatives repart de zéro. Renvoie le nombre de photos relancées.
+        """
+        with self.transaction() as c:
+            sql = ("UPDATE photos SET given_up_at = NULL, next_attempt_at = NULL, attempts = 0, "
+                   "updated_at = ? WHERE state = 'detected' AND given_up_at IS NOT NULL")
+            params: list[Any] = [utc_now()]
+            if photo_ids is not None:
+                ids = list(photo_ids)
+                sql += f" AND id IN ({','.join('?' * len(ids))})" if ids else " AND 0"
+                params += ids
+            rows = c.execute(sql + " RETURNING id", params).fetchall()
+            for r in rows:
+                self._log(c, "retry_requested", r["id"])
+            return len(rows)
+
+    def set_priority(self, photo_ids: Iterable[int], priority: int = 1) -> None:
+        """Ex. « télécharger celle-ci maintenant » : priority > 0 passe devant le reste.
+
+        Une photo prioritaire en attente de nouvelle tentative est reprise tout de suite.
+        """
+        ids = list(photo_ids)
+        if not ids:
+            return
+        with self.transaction() as c:
+            c.execute(
+                f"UPDATE photos SET priority = ?, "
+                f"next_attempt_at = CASE WHEN ? > 0 THEN NULL ELSE next_attempt_at END, "
+                f"updated_at = ? WHERE id IN ({','.join('?' * len(ids))})",
+                (priority, priority, utc_now(), *ids),
+            )
+            for i in ids:
+                self._log(c, "priority", i, data={"priority": priority})
+
+    def count_given_up(self) -> int:
+        return self.conn.execute(
+            "SELECT count(*) FROM photos WHERE state = 'detected' AND given_up_at IS NOT NULL"
+        ).fetchone()[0]
 
     def mark_synced(self, photo_id: int, pc_sha256: str) -> Photo:
         """Le PC a recalculé le hash : il doit être identique à celui de la sauvegarde."""

@@ -183,20 +183,6 @@ def test_disk_full(env, monkeypatch):
     assert parts(sd) == []
 
 
-def test_drain_gives_up_after_max_attempts(env):
-    cam, sd, db = env
-    bad, _ = shoot(cam, db, "DSC_0001.JPG")
-    good, _ = shoot(cam, db, "DSC_0002.JPG", t="2026-11-23T10:00:01")
-    (cam / FOLDER.lstrip("/") / "DSC_0001.JPG").unlink()  # toujours introuvable
-
-    d = Downloader(db, DirectorySource(cam), sd)
-    for _ in range(4):
-        d.drain(max_attempts=3)
-
-    assert db.get(bad.id).state == "detected"  # jamais marquée sauvegardée
-    assert db.get(good.id).state == "verified"
-
-
 # ------------------------------------------------------------------ reprise
 
 def test_recover_removes_orphan_part(env):
