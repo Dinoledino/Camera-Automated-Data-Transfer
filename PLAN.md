@@ -5,7 +5,8 @@
 Faire de l'A50 un compagnon de prise de vue :
 - **Sauvegarde au fil de l'eau** : chaque photo prise par le D850 est copiée sur le téléphone dès que possible, pendant la séance.
 - **Vérification** : chaque copie est contrôlée par SHA-256 avant d'être considérée comme sûre.
-- **Tri sur place** : parcourir, noter, marquer et supprimer les photos depuis le téléphone.
+- **Libération de la carte** : chaque photo est effacée de la carte du D850 dès que sa copie est vérifiée (décision du 2026-11-25).
+- **Tri sur place** : parcourir, mettre en favori, garder ou rejeter les photos depuis le téléphone.
 - **Synchronisation** vers le PC une fois rentré chez soi.
 
 ## 2. Matériel et faits établis
@@ -215,7 +216,8 @@ Les étapes ci-dessous valent pour les options A et B. Pour l'option C, remplace
 ### Phase 5 : interface de tri (FastAPI, ouverte dans le navigateur du téléphone)
 - Galerie avec un compteur bien visible : « N photos pas encore sauvegardées ».
 - Vue plein écran avec balayage, notes de 1 à 5, drapeau « garder » ou « rejeter ».
-- Suppression en deux temps : marquer, puis confirmer. Côté appareil, la suppression PTP n'est possible que si la photo est en état `verified`.
+- Effacement côté appareil automatique, juste après la vérification (voir CLAUDE.md, règle 2) : pas d'écran de suppression manuelle. Avant chaque effacement PTP, relire les informations du fichier sur l'appareil (nom, taille, date) et ne l'effacer que si elles sont identiques à la copie vérifiée. Après une coupure entre l'effacement et l'écriture en base (`delete_requested`), constater au redémarrage que le fichier a disparu de l'appareil et passer à `deleted_on_camera`.
+- Interface (maquette validée le 2026-11-25) : galerie, plein écran avec favori / garder / rejeter, sélection et déplacement entre sessions (renommage en option, décoché par défaut), sessions, réglages (thème, couleur, taille des miniatures, informations affichées), journal des événements en langage clair, exportable dans un fichier. Aucun terme technique (SHA-256, etc.) dans l'interface.
 - Rangement : renommage et classement par séance.
 - Écriture des notes et drapeaux dans les fichiers XMP.
 
