@@ -27,6 +27,7 @@ from .db import Database
 from .downloader import DiskFull, Downloader, Outcome, SourceDisconnected, SourceError
 
 if TYPE_CHECKING:
+    from .cleaner import CameraCleaner
     from .indexer import Indexer
 
 log = logging.getLogger("cadt.watcher")
@@ -44,6 +45,7 @@ class PollResult:
     pending_stability: int = 0
     outcomes: list[Outcome] = field(default_factory=list)
     indexed: int = 0
+    deleted_on_camera: int = 0
 
     @property
     def saved(self) -> int:
@@ -55,7 +57,7 @@ class Watcher:
                  stable_polls: int = 2, refresh_each_poll: bool = True,
                  indexer: "Indexer | None" = None, index_budget_seconds: float = 1.0,
                  drain_budget_seconds: float = 10.0, drain_budget_raw_only_seconds: float = 60.0,
-                 recent_window: int = 20):
+                 recent_window: int = 20, cleaner: "CameraCleaner | None" = None):
         self.db = db
         self.lister = lister
         self.downloader = downloader
@@ -70,6 +72,8 @@ class Watcher:
         self.drain_budget_seconds = drain_budget_seconds
         self.drain_budget_raw_only_seconds = drain_budget_raw_only_seconds
         self.recent_window = recent_window
+        self.cleaner = cleaner                # effacement de l'appareil après vérification
+        self._last_listing: list = []
         self._known: set[tuple] = set()               # déjà enregistrés en base
         self._candidates: dict[tuple[str, str], tuple[tuple, int]] = {}  # (dossier, nom) → (clé, vu n fois)
 
@@ -92,6 +96,7 @@ class Watcher:
         if self.refresh_each_poll:
             self.lister.refresh()
         files = self.lister.list_files()
+        self._last_listing = files
         result = PollResult(seen=len(files))
         present: set[tuple[str, str]] = set()
         for f in files:
@@ -114,6 +119,8 @@ class Watcher:
             if where not in present:
                 del self._candidates[where]
         result.outcomes = self.downloader.drain(max_seconds=self.current_drain_budget())
+        if self.cleaner is not None:
+            result.deleted_on_camera = len(self.cleaner.run(self._last_listing).deleted)
         # L'indexation ne passe que quand plus rien n'attend d'être sauvegardé (pas de fichier
         # en cours de stabilisation, file vide), et seulement le temps imparti : sur l'A50, un
         # NEF coûte ~1,5 s d'indexation, qu'on ne veut pas voler à une rafale en cours.
@@ -201,7 +208,9 @@ def main(argv: list[str] | None = None) -> int:
         if exiftool is not None:
             from .indexer import Indexer
             indexer = Indexer(db, args.dest, exiftool)
-        watcher = Watcher(db, source, Downloader(db, source, args.dest), indexer=indexer)
+        from .cleaner import CameraCleaner
+        watcher = Watcher(db, source, Downloader(db, source, args.dest), indexer=indexer,
+                          cleaner=CameraCleaner(db, source))
         try:
             watcher.run(interval=args.interval, should_stop=lambda: stop)
         except DiskFull:

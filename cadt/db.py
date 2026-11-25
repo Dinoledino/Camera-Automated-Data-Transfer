@@ -644,8 +644,8 @@ class Database:
             )
             self._log(c, "delete_cancelled", photo_id)
 
-    def mark_deleted_on_camera(self, photo_id: int) -> None:
-        """À appeler seulement APRÈS une suppression PTP réussie, confirmée par l'utilisateur."""
+    def mark_deleted_on_camera(self, photo_id: int, note: str | None = None) -> None:
+        """À appeler seulement APRÈS l'effacement sur l'appareil (ou le constat de son absence)."""
         with self.transaction() as c:
             cur = c.execute(
                 "UPDATE photos SET delete_state = 'deleted_on_camera', updated_at = ? "
@@ -654,7 +654,43 @@ class Database:
             )
             if cur.rowcount != 1:
                 raise InvalidTransition(f"photo {photo_id} : suppression non demandée")
-            self._log(c, "deleted_on_camera", photo_id)
+            self._log(c, "deleted_on_camera", photo_id, note)
+
+    # ------------------------------------------------------------- réglages
+
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        row = self.conn.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row and row["value"] is not None else default
+
+    def set_setting(self, key: str, value: str | None) -> None:
+        with self.transaction() as c:
+            c.execute("INSERT INTO app_state (key, value) VALUES (?, ?) "
+                      "ON CONFLICT (key) DO UPDATE SET value = excluded.value", (key, value))
+            self._log(c, "setting", data={"key": key, "value": value})
+
+    # ------------------------------------------------------------- effacement sur l'appareil
+
+    def auto_delete_enabled(self) -> bool:
+        """Effacement automatique de la carte de l'appareil après vérification (activé par défaut)."""
+        return self.get_setting("auto_delete_camera", "1") == "1"
+
+    def set_auto_delete(self, enabled: bool) -> None:
+        """Le réactiver ne concerne que les photos vérifiées à partir de maintenant : celles d'une
+        séance faite avec l'effacement désactivé restent sur l'appareil."""
+        self.set_setting("auto_delete_camera", "1" if enabled else "0")
+        if enabled:
+            self.set_setting("auto_delete_since", utc_now())
+
+    def camera_deletion_candidates(self, limit: int = 200) -> list[Photo]:
+        """Photos vérifiées encore sur l'appareil (ou dont l'effacement a été interrompu)."""
+        since = self.get_setting("auto_delete_since", "")
+        rows = self.conn.execute(
+            """SELECT * FROM photos
+               WHERE state IN ('verified', 'synced_pc')
+                 AND delete_state IN ('none', 'delete_requested')
+                 AND (delete_state = 'delete_requested' OR verified_at >= ?)
+               ORDER BY verified_at, id LIMIT ?""", (since, limit)).fetchall()
+        return [Photo(**dict(r)) for r in rows]
 
 
 def _split_sql(script: str) -> list[str]:

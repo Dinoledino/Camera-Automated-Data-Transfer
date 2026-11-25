@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Protocol
 
+from .camera import CameraFile, storage_of
 from .db import Database, HashMismatch, Photo, iso_utc
 from .fsutil import CHUNK_SIZE, remove_quietly, fsync_dir, sha256_file
 from .sessions import download_path, recover_moves
@@ -81,6 +82,22 @@ class DirectorySource:
             raise SourceError(f"{folder}/{name} introuvable") from e
         except OSError as e:
             raise SourceDisconnected(str(e)) from e
+
+    def stat(self, folder: str, name: str) -> CameraFile | None:
+        """Informations actuelles du fichier sur l'« appareil », ou None s'il n'existe plus."""
+        try:
+            st = (self.root / folder.lstrip("/") / name).stat()
+        except FileNotFoundError:
+            return None
+        return CameraFile(folder, name, st.st_size,
+                          datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
+                          storage_of(folder))
+
+    def delete(self, folder: str, name: str) -> None:
+        try:
+            (self.root / folder.lstrip("/") / name).unlink()
+        except FileNotFoundError as e:
+            raise SourceError(f"{folder}/{name} introuvable") from e
 
 
 # ------------------------------------------------------------------ résultats

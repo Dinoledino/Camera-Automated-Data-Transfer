@@ -152,6 +152,27 @@ class Gphoto2Source:
             if not sub.startswith("."):
                 self._walk(cam, f"{folder.rstrip('/')}/{sub}", out)
 
+    # ---------------------------------------------------------- un fichier
+
+    def stat(self, folder: str, name: str) -> CameraFile | None:
+        """Informations actuelles du fichier sur l'appareil, ou None s'il n'existe plus."""
+        try:
+            info = self._cam().file_get_info(folder, name)
+        except gp.GPhoto2Error as e:
+            if e.code in (gp.GP_ERROR_FILE_NOT_FOUND, gp.GP_ERROR_DIRECTORY_NOT_FOUND):
+                return None
+            raise _translate(e, f"{folder}/{name}") from e
+        return CameraFile(folder, name, int(info.file.size),
+                          datetime.fromtimestamp(info.file.mtime).isoformat(timespec="seconds"),
+                          storage_of(folder))
+
+    def delete(self, folder: str, name: str) -> None:
+        """Efface le fichier de la carte de l'appareil (PTP DeleteObject)."""
+        try:
+            self._cam().file_delete(folder, name)
+        except gp.GPhoto2Error as e:
+            raise _translate(e, f"effacement de {folder}/{name}") from e
+
     # ---------------------------------------------------------- lecture
 
     def iter_chunks(self, folder: str, name: str) -> Iterator[bytes]:
