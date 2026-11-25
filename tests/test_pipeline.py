@@ -59,14 +59,24 @@ def test_verification_runs_in_worker_thread_and_overlaps(env, monkeypatch):
     t = time.monotonic()
     outs = Downloader(db, SlowSource(cam, 0.15), sd).drain()
     pipelined = time.monotonic() - t
+    pipelined_threads = list(threads)
+
+    # Référence sur la même machine : mêmes photos, sans recouvrement (base séparée).
+    with Database(sd.parent / "sequentiel.db") as db2:
+        for p, _ in photos:
+            db2.add_detected(FOLDER, p.name, p.size, p.capture_time)
+        t = time.monotonic()
+        Downloader(db2, SlowSource(cam, 0.15), sd.parent / "sd2", pipelined=False).drain()
+        sequential = time.monotonic() - t
 
     assert all(o.ok for o in outs) and len(outs) == 5
-    assert all(name.startswith("verify") for name in threads)
+    assert pipelined_threads and all(name.startswith("verify") for name in pipelined_threads)
     for p, data in photos:
         assert open(db.get(p.id).local_path, "rb").read() == data
     assert parts(sd) == []
-    # 5 × (0,15 transfert + 0,15 vérification) = 1,5 s en séquentiel ; ~0,9 s en recouvrement
-    assert pipelined < 1.25
+    # 5 × (0,15 transfert + 0,15 vérification) = 1,5 s en séquentiel ; ~0,9 s en recouvrement.
+    # Comparaison relative : robuste sur une machine chargée (le téléphone pendant les tests).
+    assert pipelined < 0.85 * sequential, (pipelined, sequential)
 
 
 def test_sequential_mode_verifies_in_main_thread(env, monkeypatch):

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import io
 import os
+import sys
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -217,3 +218,59 @@ class Indexer:
     def get(self, photo_id: int) -> Media | None:
         row = self.db.conn.execute("SELECT * FROM media WHERE photo_id = ?", (photo_id,)).fetchone()
         return Media(**dict(row)) if row else None
+
+
+# ------------------------------------------------------------------ processus autonome
+
+def on_android() -> bool:
+    return hasattr(sys, "getandroidapilevel") or "ANDROID_ROOT" in os.environ
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Indexation dans son propre processus (lancé par cadt.supervise).
+
+    Isolée du watcher : un plantage du code compilé de traitement d'image (constaté avec
+    Python 3.14.10 de Termux, ramasse-miettes en cause) ne doit jamais interrompre la sauvegarde.
+    """
+    import argparse
+    import signal
+    import sys
+
+    from .exif import ExifTool
+    from .storage import StoragePool
+
+    p = argparse.ArgumentParser(description="Indexation des photos sauvegardées (miniatures, aperçus).")
+    p.add_argument("--db", type=Path, required=True)
+    p.add_argument("--dest", type=Path, required=True, action="append")
+    p.add_argument("--idle", type=float, default=2.0, help="pause quand il n'y a rien à faire (s)")
+    p.add_argument("--once", action="store_true", help="tout indexer puis s'arrêter")
+    args = p.parse_args(argv)
+    stop = False
+
+    def on_signal(*_: object) -> None:
+        nonlocal stop
+        stop = True
+
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+    if on_android():
+        # Python 3.14.10 de Termux : le ramasse-miettes provoque un plantage intermittent du code
+        # compilé pendant le traitement d'image (constaté le 2026-11-25, jamais sur PC). Les images
+        # sont libérées par comptage de références ; le superviseur relance en cas de plantage.
+        import gc
+        gc.disable()
+    pool = StoragePool(args.dest, reserve_bytes=0)
+    with Database(args.db) as db, ExifTool() as et:
+        ix = Indexer(db, pool.primary, et)
+        while not stop:
+            done = ix.run(max_seconds=5.0)
+            if args.once and done == 0:
+                break
+            if done == 0:
+                time.sleep(args.idle)
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

@@ -245,17 +245,12 @@ def main(argv: list[str] | None = None) -> int:
 
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
-    from . import exif
-    exiftool = exif.ExifTool() if exif.available() else None
-    if exiftool is None:
-        log.warning("exiftool introuvable : pas d'indexation (miniatures, EXIF)")
+    # L'indexation (miniatures, aperçus) tourne dans son propre processus (python -m cadt.indexer,
+    # lancé par cadt.supervise) : un plantage du traitement d'image n'arrête pas la sauvegarde.
     from .storage import GB, StoragePool
     pool = StoragePool(args.dest, reserve_bytes=int(args.reserve_gb * GB))
     with Database(args.db) as db:
         indexer = None
-        if exiftool is not None:
-            from .indexer import Indexer
-            indexer = Indexer(db, pool.primary, exiftool)
         from .cleaner import CameraCleaner
         from .trash import Trash
         watcher = Watcher(db, source, Downloader(db, source, pool), indexer=indexer,
@@ -264,8 +259,6 @@ def main(argv: list[str] | None = None) -> int:
             watcher.run(interval=args.interval, should_stop=lambda: stop)
         finally:
             source.close()
-            if exiftool is not None:
-                exiftool.close()
         log.info("arrêté : %d photos non sauvegardées.", db.count_unsaved())
     return 0
 

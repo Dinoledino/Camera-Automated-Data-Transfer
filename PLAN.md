@@ -344,6 +344,7 @@ Exigence : la sonde n'a aucune dépendance réseau et ne fait aucune suppression
 | gphoto2 absent de Termux | Compiler, ou passer par un chroot Debian (proot-distro) |
 | Débit USB réel très inférieur à 25 Mo/s | Récupérer seulement les JPEG pendant la séance, et les RAW le soir |
 | Ralentissement dû à la chaleur | Limiter la fréquence du processeur et du hachage, ventiler le téléphone |
+| Plantage du code compilé de traitement d'image (constaté : Python 3.14.10 de Termux, ramasse-miettes en cause) | Trois processus séparés (sauvegarde, aperçus, interface) relancés par `cadt.supervise` ; ramasse-miettes désactivé dans le processus des aperçus sur Android ; la sauvegarde reprend proprement après un arrêt brutal |
 | Batterie qui gonfle à force d'être branchée | Limite de charge à 80 %, contrôle visuel régulier |
 
 ## 8. Pistes bonus (après le projet principal)
