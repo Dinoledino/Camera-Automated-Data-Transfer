@@ -36,6 +36,7 @@ from .camera import CameraFile, storage_of
 from .db import Database, HashMismatch, Photo, iso_utc
 from .fsutil import CHUNK_SIZE, remove_quietly, fsync_dir, sha256_file
 from .sessions import download_path, recover_moves
+from .storage import StoragePool
 
 PART_SUFFIX = ".part"
 
@@ -151,7 +152,7 @@ def _utc_clock() -> datetime:
 # ------------------------------------------------------------------ downloader
 
 class Downloader:
-    def __init__(self, db: Database, source: Source, dest_root: str | Path,
+    def __init__(self, db: Database, source: Source, dest_root: "str | Path | StoragePool",
                  policy: RetryPolicy = RetryPolicy(),
                  clock: Callable[[], datetime] = _utc_clock,
                  pipelined: bool = True,
@@ -159,7 +160,8 @@ class Downloader:
                  timer: Callable[[], float] = time.monotonic):
         self.db = db
         self.source = source
-        self.dest_root = Path(dest_root)
+        self.pool = StoragePool.of(dest_root)
+        self.dest_root = self.pool.primary  # emplacement principal (compatibilité)
         self.policy = policy
         self.clock = clock  # remplaçable dans les tests
         self.pipelined = pipelined
@@ -168,18 +170,21 @@ class Downloader:
 
     # ---------------------------------------------------------- chemins
 
-    def part_path(self, photo: Photo) -> Path:
+    def part_path(self, photo: Photo, root: Path | None = None) -> Path:
         """Fichier temporaire caché, propre à la photo (l'id évite toute collision)."""
-        final = self.final_path(photo)
+        final = self.final_path(photo, root)
         return final.with_name(f".{final.name}.{photo.id}{PART_SUFFIX}")
 
-    def final_path(self, photo: Photo) -> Path:
-        """Dossier et nom selon la session de la photo (voir cadt.sessions).
+    def final_path(self, photo: Photo, root: Path | None = None) -> Path:
+        """Dossier et nom selon la session de la photo (voir cadt.sessions), dans `root`
+        (par défaut l'emplacement qui a la place, sinon le principal).
 
         Le D850 recommence à DSC_0001 après 9999 : deux photos différentes peuvent avoir
         le même nom le même jour. On ne remplace jamais le fichier d'une autre photo.
         """
-        return download_path(self.db, self.dest_root, photo)
+        if root is None:
+            root = self.pool.choose(photo.size) or self.pool.primary
+        return download_path(self.db, root, photo)
 
     # ---------------------------------------------------------- reprise
 
@@ -189,10 +194,11 @@ class Downloader:
         if lost:
             self.db.log_event("recover_lost_files", data={"photo_ids": lost})
         interrupted = self.db.reset_interrupted()
-        if self.dest_root.exists():
-            for part in self.dest_root.rglob(f".*{PART_SUFFIX}"):
-                remove_quietly(part)
-                self.db.log_event("orphan_part_removed", message=str(part))
+        for root in self.pool.roots:
+            if root.exists():
+                for part in root.rglob(f".*{PART_SUFFIX}"):
+                    remove_quietly(part)
+                    self.db.log_event("orphan_part_removed", message=str(part))
         return interrupted
 
     # ---------------------------------------------------------- une photo
@@ -211,8 +217,13 @@ class Downloader:
 
     def _transfer(self, photo: Photo) -> "_InFlight | Outcome":
         """Étape 1 (fil principal) : appareil → .part, hash calculé au passage. Pas encore de fsync."""
-        final = self.final_path(photo)
-        part = self.part_path(photo)
+        root = self.pool.choose(photo.size)
+        if root is None:
+            # Téléphone plein : la photo reste sur l'appareil (jamais effacée sans copie vérifiée).
+            self.db.mark_failed(photo.id, "mémoire du téléphone pleine", count_attempt=False)
+            raise DiskFull("aucun emplacement de stockage n'a assez de place")
+        final = self.final_path(photo, root)
+        part = self.part_path(photo, root)
         try:
             final.parent.mkdir(parents=True, exist_ok=True)
             fsync_dir(final.parent.parent)

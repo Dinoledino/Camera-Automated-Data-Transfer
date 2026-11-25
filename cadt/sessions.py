@@ -20,6 +20,7 @@ from typing import Iterable
 
 from .db import Database, InvalidTransition, Photo, Session
 from .fsutil import fsync_dir
+from .storage import StoragePool
 
 NO_SESSION_FOLDER_FALLBACK = "sans-date"
 
@@ -63,7 +64,7 @@ class MoveResult:
     refused: list[tuple[int, str]]   # (id, raison)
 
 
-def move_photos(db: Database, dest_root: str | Path, photo_ids: Iterable[int],
+def move_photos(db: Database, dest_root: "str | Path | StoragePool", photo_ids: Iterable[int],
                 session_id: int | None, rename: bool = False) -> MoveResult:
     """Range des photos dans une autre session (None : retour au dossier par date).
 
@@ -71,7 +72,7 @@ def move_photos(db: Database, dest_root: str | Path, photo_ids: Iterable[int],
     rename=True : il prend le nom <day>_<slug>_<NNNN> de la nouvelle session
     (ou son nom d'origine, s'il retourne au dossier par date).
     """
-    dest_root = Path(dest_root)
+    pool = StoragePool.of(dest_root)
     session = None
     if session_id is not None:
         session = db.get_session(session_id)
@@ -93,7 +94,8 @@ def move_photos(db: Database, dest_root: str | Path, photo_ids: Iterable[int],
         if photo.session_id == session_id and not rename:
             continue
         try:
-            moved.append(_move_one(db, dest_root, photo, session, rename))
+            # Même emplacement que le fichier actuel : le déplacement reste un renommage atomique.
+            moved.append(_move_one(db, pool.root_of(photo.local_path), photo, session, rename))
         except InvalidTransition as e:
             refused.append((photo_id, str(e)))
     return MoveResult(moved, reassigned, refused)

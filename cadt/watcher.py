@@ -144,13 +144,24 @@ class Watcher:
 
     def run(self, interval: float = 2.0, reconnect_delay: float = 5.0,
             should_stop: Callable[[], bool] = lambda: False,
-            sleep: Callable[[float], None] = time.sleep) -> None:
-        """Boucle principale : tourne jusqu'à should_stop() ou carte pleine."""
+            sleep: Callable[[float], None] = time.sleep,
+            full_retry_delay: float = 60.0,
+            on_disk_full: Callable[[], int] | None = None) -> None:
+        """Boucle principale : tourne jusqu'à should_stop().
+
+        Téléphone plein : la copie s'arrête mais la boucle continue (l'interface reste utilisable,
+        et la copie reprend dès qu'on libère de la place). on_disk_full() peut libérer de la place
+        (ex. vider la corbeille) et renvoie le nombre d'octets libérés.
+        """
         self.downloader.recover()
+        full = False
         while not should_stop():
             started = time.monotonic()
             try:
                 r = self.poll_once()
+                if full and r.saved:
+                    full = False
+                    self.db.log_event("storage_ok", message="de la place s'est libérée : la copie reprend")
                 if r.new or r.outcomes:
                     log.info("%d nouvelles, %d sauvegardées, %d échecs, %d non sauvegardées au total",
                              r.new, r.saved, len(r.outcomes) - r.saved, self.db.count_unsaved())
@@ -167,8 +178,17 @@ class Watcher:
                 self._candidates.clear()
                 sleep(reconnect_delay)
             except DiskFull:
-                log.error("microSD pleine : arrêt. %d photos non sauvegardées.", self.db.count_unsaved())
-                raise
+                freed = on_disk_full() if on_disk_full is not None else 0
+                if freed:
+                    log.warning("mémoire pleine : %d octets libérés, la copie reprend", freed)
+                    continue
+                if not full:
+                    log.error("mémoire du téléphone pleine : la copie s'arrête, %d photos restent sur "
+                              "l'appareil photo", self.db.count_unsaved())
+                    self.db.log_event("storage_full", message="mémoire du téléphone pleine : copie arrêtée")
+                full = True
+                sleep(full_retry_delay)
+                continue
             except SourceError as e:
                 log.warning("erreur passagère pendant la liste : %s", e)
                 sleep(interval)
@@ -179,7 +199,11 @@ class Watcher:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Sauvegarde au fil de l'eau des photos de l'appareil.")
     p.add_argument("--db", type=Path, required=True, help="base SQLite")
-    p.add_argument("--dest", type=Path, required=True, help="racine de la sauvegarde (microSD)")
+    p.add_argument("--dest", type=Path, required=True, action="append",
+                   help="emplacement de sauvegarde ; à répéter, dans l'ordre de remplissage "
+                        "(ex. --dest mémoire-interne --dest microSD)")
+    p.add_argument("--reserve-gb", type=float, default=2.0,
+                   help="marge gardée libre sur chaque emplacement (Go)")
     p.add_argument("--card", type=Path, help="lire ce dossier comme un appareil (simulateur)")
     p.add_argument("--interval", type=float, default=2.0, help="secondes entre deux passages")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -203,18 +227,18 @@ def main(argv: list[str] | None = None) -> int:
     exiftool = exif.ExifTool() if exif.available() else None
     if exiftool is None:
         log.warning("exiftool introuvable : pas d'indexation (miniatures, EXIF)")
+    from .storage import GB, StoragePool
+    pool = StoragePool(args.dest, reserve_bytes=int(args.reserve_gb * GB))
     with Database(args.db) as db:
         indexer = None
         if exiftool is not None:
             from .indexer import Indexer
-            indexer = Indexer(db, args.dest, exiftool)
+            indexer = Indexer(db, pool.primary, exiftool)
         from .cleaner import CameraCleaner
-        watcher = Watcher(db, source, Downloader(db, source, args.dest), indexer=indexer,
+        watcher = Watcher(db, source, Downloader(db, source, pool), indexer=indexer,
                           cleaner=CameraCleaner(db, source))
         try:
             watcher.run(interval=args.interval, should_stop=lambda: stop)
-        except DiskFull:
-            return 2
         finally:
             source.close()
             if exiftool is not None:
