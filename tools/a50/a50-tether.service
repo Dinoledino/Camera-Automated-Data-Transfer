@@ -1,0 +1,29 @@
+# Service utilisateur systemd : lance a50-tether.sh à l'ouverture de session Ubuntu.
+#
+# Installation (une fois) :
+#   mkdir -p ~/.config/systemd/user
+#   cp tools/a50/a50-tether.service ~/.config/systemd/user/
+#   # adapter ExecStart ci-dessous si le dépôt n'est pas à cet endroit
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now a50-tether.service
+#
+# Suivre ce qu'il fait :   journalctl --user -u a50-tether -f
+#                          tail -f ~/.local/state/a50-tether/tether.log
+# Arrêter / désactiver :   systemctl --user disable --now a50-tether.service
+#
+# Pour qu'il démarre dès l'allumage du PC, avant même d'ouvrir une session (facultatif) :
+#   loginctl enable-linger "$USER"
+# (les notifications de bureau n'apparaissent alors qu'une fois la session ouverte ; le journal, lui,
+# est toujours écrit).
+
+[Unit]
+Description=Partage de connexion USB pour le Galaxy A50 et surveillance de KnoxGuard
+
+[Service]
+Type=simple
+ExecStart=%h/Bureau/projets/DispositifNikon/Camera-Automated-Data-Transfer/tools/a50/a50-tether.sh
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target
