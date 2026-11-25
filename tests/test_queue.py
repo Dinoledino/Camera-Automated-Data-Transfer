@@ -158,3 +158,24 @@ def test_priority_skips_wait(env):
     db.set_priority([photo.id])
     [out] = d.drain()
     assert out.ok
+
+
+def test_busy_camera_waits_briefly_without_penalty(env):
+    from cadt.downloader import SourceBusy
+    cam, db, d, clock = env
+    photo = shoot(cam, db, "DSC_0001.NEF")
+
+    class Busy(DirectorySource):
+        def iter_chunks(self, folder, name):
+            raise SourceBusy("PTP Device Busy")
+            yield b""
+
+    d.source = Busy(cam)
+    for _ in range(20):
+        d.drain()
+        clock.advance(2)
+    p = db.get(photo.id)
+    assert p.attempts == 0 and p.given_up_at is None
+    d.source = DirectorySource(cam)
+    [out] = d.drain()
+    assert out.ok

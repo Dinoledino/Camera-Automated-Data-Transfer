@@ -37,6 +37,10 @@ class SourceError(Exception):
     """Échec de lecture d'un fichier sur l'appareil ; les autres fichiers restent lisibles."""
 
 
+class SourceBusy(SourceError):
+    """L'appareil est momentanément occupé (« PTP Device Busy ») : on réessaie bientôt."""
+
+
 class SourceDisconnected(SourceError):
     """L'appareil n'est plus joignable (débranché, éteint) : inutile de continuer la file."""
 
@@ -96,6 +100,7 @@ class RetryPolicy:
     base_delay: float = 5.0
     factor: float = 3.0
     max_delay: float = 600.0
+    busy_delay: float = 2.0   # appareil occupé : délai fixe, sans pénalité
 
     def delay(self, attempts: int) -> float:
         return min(self.base_delay * self.factor ** max(attempts - 1, 0), self.max_delay)
@@ -190,6 +195,12 @@ class Downloader:
                 raise DiskFull(str(e)) from e
             self._fail(photo, part, f"erreur disque : {e}")
             raise
+        except SourceBusy as e:
+            # Pas la faute de la photo : tentative non comptée, nouvel essai un peu plus tard.
+            remove_quietly(part)
+            retry_at = iso_utc(self.clock() + timedelta(seconds=self.policy.busy_delay))
+            failed = self.db.mark_failed(photo.id, str(e), retry_at=retry_at, count_attempt=False)
+            return Outcome(failed, False, str(e))
         except SourceError as e:
             failed = self._fail(photo, part, str(e))
             return Outcome(failed, False, str(e))

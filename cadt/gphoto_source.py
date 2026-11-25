@@ -1,0 +1,177 @@
+"""Source « appareil photo » via libgphoto2 (bindings python-gphoto2).
+
+Sert au watcher (lister les fichiers) et au downloader (lire un fichier).
+Fonctionne avec un vrai appareil PTP et avec le pilote « Directory Browse »
+(port disk:<dossier>), utilisé avec le simulateur.
+
+Points connus :
+- Directory Browse ne prend pas en charge file_read (lecture par morceaux) : on se
+  rabat sur file_get (fichier entier en mémoire, ~50 Mo pour un NEF de D850).
+  Lecture partielle sur le D850 : À VÉRIFIER.
+- libgphoto2 garde la liste des fichiers en cache : refresh() se reconnecte
+  (exit puis init). Sur un vrai appareil, le cache est peut-être tenu à jour par les
+  événements PTP, auquel cas la reconnexion serait inutile : À VÉRIFIER.
+- Le D850 peut répondre « PTP Device Busy » (écriture sur la carte, mise au point) :
+  erreur passagère (SourceBusy), qui ne pénalise pas la photo.
+- Heure de prise de vue = mtime renvoyé par libgphoto2, interprété en heure locale.
+  Exact avec Directory Browse ; pour un appareil PTP (date sans fuseau) : À VÉRIFIER.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Iterator
+
+import gphoto2 as gp
+
+from .downloader import CHUNK_SIZE, SourceBusy, SourceDisconnected, SourceError
+
+DIRECTORY_BROWSE = "Directory Browse"
+
+# Codes d'erreur qui signifient « l'appareil n'est plus là ».
+_DISCONNECTED = {
+    gp.GP_ERROR_IO, gp.GP_ERROR_IO_INIT, gp.GP_ERROR_IO_READ, gp.GP_ERROR_IO_WRITE,
+    gp.GP_ERROR_IO_USB_FIND, gp.GP_ERROR_IO_USB_CLAIM, gp.GP_ERROR_IO_LOCK,
+    gp.GP_ERROR_MODEL_NOT_FOUND, gp.GP_ERROR_TIMEOUT,
+}
+
+
+@dataclass(frozen=True)
+class CameraFile:
+    folder: str
+    name: str
+    size: int
+    capture_time: str        # heure locale, ISO 8601 sans fuseau
+    storage_id: str | None   # ex. store_00010001 (premier niveau de l'arborescence PTP)
+
+    @property
+    def key(self) -> tuple[str, int, str]:
+        """Identité d'une photo, comme dans la base : (nom, taille, date)."""
+        return (self.name, self.size, self.capture_time)
+
+
+def _translate(e: gp.GPhoto2Error, what: str) -> SourceError:
+    if e.code == gp.GP_ERROR_CAMERA_BUSY:
+        return SourceBusy(f"{what} : appareil occupé")
+    if e.code in _DISCONNECTED:
+        return SourceDisconnected(f"{what} : {e}")
+    return SourceError(f"{what} : {e}")
+
+
+class Gphoto2Source:
+    """Un appareil photo, détecté automatiquement ou désigné par modèle et port."""
+
+    def __init__(self, model: str | None = None, port: str | None = None):
+        self.model = model
+        self.port = port
+        self.camera: gp.Camera | None = None
+        self._partial_reads = True   # passe à False si l'appareil refuse file_read
+
+    @classmethod
+    def directory(cls, card: str) -> "Gphoto2Source":
+        """Un dossier vu comme un appareil (pilote Directory Browse) : pour le simulateur."""
+        return cls(DIRECTORY_BROWSE, f"disk:{card}")
+
+    # ---------------------------------------------------------- connexion
+
+    def connect(self) -> None:
+        camera = gp.Camera()
+        try:
+            if self.model:
+                abilities = gp.CameraAbilitiesList()
+                abilities.load()
+                camera.set_abilities(abilities.get_abilities(abilities.lookup_model(self.model)))
+            if self.port:
+                ports = gp.PortInfoList()
+                ports.load()
+                camera.set_port_info(ports[ports.lookup_path(self.port)])
+            camera.init()
+        except gp.GPhoto2Error as e:
+            raise SourceDisconnected(f"connexion impossible : {e}") from e
+        self.camera = camera
+
+    def close(self) -> None:
+        if self.camera is not None:
+            try:
+                self.camera.exit()
+            except gp.GPhoto2Error:
+                pass
+            self.camera = None
+
+    def refresh(self) -> None:
+        """Vide le cache de libgphoto2 en se reconnectant."""
+        self.close()
+        self.connect()
+
+    def _cam(self) -> gp.Camera:
+        if self.camera is None:
+            self.connect()
+        return self.camera
+
+    def __enter__(self) -> "Gphoto2Source":
+        self.connect()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    # ---------------------------------------------------------- liste
+
+    def list_files(self, folder: str = "/") -> list[CameraFile]:
+        """Tous les fichiers de l'appareil, en parcourant l'arborescence (dossiers cachés exclus)."""
+        cam = self._cam()
+        out: list[CameraFile] = []
+        try:
+            self._walk(cam, folder, out)
+        except gp.GPhoto2Error as e:
+            raise _translate(e, "liste des fichiers") from e
+        return out
+
+    def _walk(self, cam: gp.Camera, folder: str, out: list[CameraFile]) -> None:
+        for i in range(len(files := cam.folder_list_files(folder))):
+            name = files.get_name(i)
+            info = cam.file_get_info(folder, name)
+            out.append(CameraFile(
+                folder=folder,
+                name=name,
+                size=int(info.file.size),
+                capture_time=datetime.fromtimestamp(info.file.mtime).isoformat(timespec="seconds"),
+                storage_id=_storage_of(folder),
+            ))
+        for i in range(len(subs := cam.folder_list_folders(folder))):
+            sub = subs.get_name(i)
+            if not sub.startswith("."):
+                self._walk(cam, f"{folder.rstrip('/')}/{sub}", out)
+
+    # ---------------------------------------------------------- lecture
+
+    def iter_chunks(self, folder: str, name: str) -> Iterator[bytes]:
+        cam = self._cam()
+        what = f"{folder}/{name}"
+        if self._partial_reads:
+            buf = bytearray(CHUNK_SIZE)
+            offset = 0
+            try:
+                while True:
+                    n = cam.file_read(folder, name, gp.GP_FILE_TYPE_NORMAL, offset, buf)
+                    if n <= 0:
+                        return
+                    yield bytes(buf[:n])
+                    offset += n
+            except gp.GPhoto2Error as e:
+                if e.code != gp.GP_ERROR_NOT_SUPPORTED or offset:
+                    raise _translate(e, what) from e
+                self._partial_reads = False  # on se rabat sur file_get, désormais
+        try:
+            f = cam.file_get(folder, name, gp.GP_FILE_TYPE_NORMAL)
+            data = memoryview(f.get_data_and_size())
+        except gp.GPhoto2Error as e:
+            raise _translate(e, what) from e
+        for i in range(0, len(data), CHUNK_SIZE):
+            yield bytes(data[i:i + CHUNK_SIZE])
+
+
+def _storage_of(folder: str) -> str | None:
+    first = folder.strip("/").split("/", 1)[0]
+    return first if first.startswith("store_") else None
