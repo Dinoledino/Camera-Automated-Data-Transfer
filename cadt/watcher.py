@@ -21,10 +21,13 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 from .db import Database
 from .downloader import DiskFull, Downloader, Outcome, SourceDisconnected, SourceError
+
+if TYPE_CHECKING:
+    from .indexer import Indexer
 
 log = logging.getLogger("cadt.watcher")
 
@@ -40,6 +43,7 @@ class PollResult:
     new: int = 0
     pending_stability: int = 0
     outcomes: list[Outcome] = field(default_factory=list)
+    indexed: int = 0
 
     @property
     def saved(self) -> int:
@@ -48,12 +52,15 @@ class PollResult:
 
 class Watcher:
     def __init__(self, db: Database, lister: Lister, downloader: Downloader,
-                 stable_polls: int = 2, refresh_each_poll: bool = True):
+                 stable_polls: int = 2, refresh_each_poll: bool = True,
+                 indexer: "Indexer | None" = None, index_budget_seconds: float = 1.0):
         self.db = db
         self.lister = lister
         self.downloader = downloader
         self.stable_polls = max(stable_polls, 1)
         self.refresh_each_poll = refresh_each_poll
+        self.indexer = indexer
+        self.index_budget_seconds = index_budget_seconds
         self._known: set[tuple] = set()               # déjà enregistrés en base
         self._candidates: dict[tuple[str, str], tuple[tuple, int]] = {}  # (dossier, nom) → (clé, vu n fois)
 
@@ -98,6 +105,10 @@ class Watcher:
             if where not in present:
                 del self._candidates[where]
         result.outcomes = self.downloader.drain()
+        # L'indexation passe après les téléchargements, et seulement le temps imparti :
+        # elle ne retarde jamais la sauvegarde des photos suivantes.
+        if self.indexer is not None:
+            result.indexed = self.indexer.run(max_seconds=self.index_budget_seconds)
         return result
 
     def run(self, interval: float = 2.0, reconnect_delay: float = 5.0,
@@ -150,14 +161,24 @@ def main(argv: list[str] | None = None) -> int:
 
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
+    from . import exif
+    exiftool = exif.ExifTool() if exif.available() else None
+    if exiftool is None:
+        log.warning("exiftool introuvable : pas d'indexation (miniatures, EXIF)")
     with Database(args.db) as db:
-        watcher = Watcher(db, source, Downloader(db, source, args.dest))
+        indexer = None
+        if exiftool is not None:
+            from .indexer import Indexer
+            indexer = Indexer(db, args.dest, exiftool)
+        watcher = Watcher(db, source, Downloader(db, source, args.dest), indexer=indexer)
         try:
             watcher.run(interval=args.interval, should_stop=lambda: stop)
         except DiskFull:
             return 2
         finally:
             source.close()
+            if exiftool is not None:
+                exiftool.close()
         log.info("arrêté : %d photos non sauvegardées.", db.count_unsaved())
     return 0
 

@@ -20,7 +20,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _SCHEMA_FILE = Path(__file__).with_name("schema.sql")  # version 1
 _MIGRATIONS_DIR = Path(__file__).with_name("migrations")  # NNN_<nom>.sql → version NNN
 
