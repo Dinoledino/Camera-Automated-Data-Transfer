@@ -18,6 +18,27 @@ Concrètement, faire de l'A50 un compagnon de prise de vue :
 - **Tri sur place** : parcourir, mettre en favori, garder ou rejeter les photos depuis le téléphone.
 - **Synchronisation** vers le PC une fois rentré chez soi.
 
+### Décisions du 2026-11-25 (précisions de l'utilisateur)
+- **Stockage intermédiaire, pas permanent.** Le téléphone garde les photos le temps de la séance ;
+  il est vidé **manuellement depuis un PC, par USB** (le Wi-Fi de l'A50 est en panne). Plus tard, sur
+  un autre téléphone avec Wi-Fi : envoi automatique vers un drive à une adresse donnée dès qu'un
+  Wi-Fi est disponible (hors prototype). L'accès par USB depuis un PC restera utile et doit être gardé.
+- **Emplacements de stockage** : mémoire interne du téléphone, puis microSD (remplies l'une après
+  l'autre). Cela couvre ~99 % des séances.
+- **Téléphone plein** : la copie s'arrête (avec une marge pour la base, le journal et les aperçus) ;
+  les photos non copiées restent simplement sur la carte du D850, qui n'est effacée qu'après
+  vérification. L'interface montre en permanence une **barre de mémoire utilisée** qui fait comprendre
+  que la copie cessera quand elle sera pleine.
+- **Rejeter** : une étiquette, plus la possibilité de **supprimer du téléphone** les photos rejetées
+  pour regagner de la place, en deux temps (marquer, puis confirmer).
+- **Usage terrain** : téléphone branché pendant toute la séance, ou branché pendant les pauses pour
+  vider la carte : les deux doivent bien marcher (réactivité dans un cas, vitesse de vidange dans l'autre).
+- **Mode « Sauvegarde » du D850** (même photo sur les deux cartes) : les deux exemplaires sont effacés
+  après vérification de la copie.
+- **Vidéos (MOV)** : récupérées et effacées comme les photos ; pas d'aperçu pour l'instant.
+- **Tri et logiciels de retouche** : favoris, gardées et rejetées écrits aussi dans des fichiers XMP à côté
+  des photos, relus par Lightroom et darktable.
+
 ## 2. Matériel et faits établis
 
 ### Samsung Galaxy A50 : SM-A505FN, CSC XEF, bootloader binaire 9 (A505FNXXU9CWB4), 4 Go de RAM, 128 Go (détails dans docs/os-choice.md)
@@ -230,10 +251,13 @@ Les étapes ci-dessous valent pour les options A et B. Pour l'option C, remplace
 - Rangement : renommage et classement par séance.
 - Écriture des notes et drapeaux dans les fichiers XMP.
 
-### Phase 6 : synchronisation vers le PC
-- Avec Syncthing (simple) ou rsync en SSH (plus de contrôle).
-- Recalcul du SHA-256 côté PC, puis passage à l'état `synced_pc`.
+### Phase 6 : vidage vers le PC (par USB)
+- Le téléphone est vidé manuellement depuis un PC, par câble USB : copie des photos avec leurs XMP,
+  recalcul du hash côté PC, puis passage à l'état `synced_pc` (rsync en SSH sur le réseau USB, ou
+  script côté PC).
+- Après confirmation que la copie PC est identique, proposer de libérer le téléphone.
 - Rapport de fin de séance : nombre de photos, taille, durée, anomalies.
+- Plus tard (autre téléphone avec Wi-Fi) : envoi automatique vers un drive ; l'accès USB reste.
 
 ### Phase 7 : premier essai avec le D850
 L'essai se fait via `probe.py` (voir la section suivante). Les étapes ci-dessous sont ce que la sonde doit couvrir.
