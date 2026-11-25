@@ -1,0 +1,113 @@
+{
+ "label": "pc-recouvrement",
+ "date": "2026-11-25T11:21:38",
+ "scale": 10,
+ "pipelined": true,
+ "drain_budget": 10.0,
+ "runs": [
+  {
+   "scenario": "rafale3",
+   "rate_mb_s": 6,
+   "files": 42,
+   "saved": 42,
+   "db_photos": 42,
+   "unsaved": 0,
+   "shooting_s": 3.9,
+   "drain_after_last_shot_s": 263.2,
+   "latency_median_s": 87.5,
+   "latency_max_s": 263.2,
+   "all_jpeg_saved_after_last_shot_s": 77.0
+  },
+  {
+   "scenario": "rafale3",
+   "rate_mb_s": 15,
+   "files": 42,
+   "saved": 42,
+   "db_photos": 42,
+   "unsaved": 0,
+   "shooting_s": 3.8,
+   "drain_after_last_shot_s": 113.6,
+   "latency_median_s": 39.9,
+   "latency_max_s": 113.6,
+   "all_jpeg_saved_after_last_shot_s": 34.6
+  },
+  {
+   "scenario": "rafale3",
+   "rate_mb_s": 25,
+   "files": 42,
+   "saved": 42,
+   "db_photos": 42,
+   "unsaved": 0,
+   "shooting_s": 3.7,
+   "drain_after_last_shot_s": 73.1,
+   "latency_median_s": 27.3,
+   "latency_max_s": 73.1,
+   "all_jpeg_saved_after_last_shot_s": 30.0
+  },
+  {
+   "scenario": "rafale3",
+   "rate_mb_s": 35,
+   "files": 42,
+   "saved": 42,
+   "db_photos": 42,
+   "unsaved": 0,
+   "shooting_s": 3.7,
+   "drain_after_last_shot_s": 55.3,
+   "latency_median_s": 23.0,
+   "latency_max_s": 55.3,
+   "all_jpeg_saved_after_last_shot_s": 26.8
+  },
+  {
+   "scenario": "rafale10",
+   "rate_mb_s": 6,
+   "files": 70,
+   "saved": 70,
+   "db_photos": 70,
+   "unsaved": 0,
+   "shooting_s": 10.7,
+   "drain_after_last_shot_s": 613.6,
+   "latency_median_s": 317.8,
+   "latency_max_s": 613.6,
+   "all_jpeg_saved_after_last_shot_s": null
+  },
+  {
+   "scenario": "rafale10",
+   "rate_mb_s": 15,
+   "files": 70,
+   "saved": 70,
+   "db_photos": 70,
+   "unsaved": 0,
+   "shooting_s": 9.9,
+   "drain_after_last_shot_s": 258.6,
+   "latency_median_s": 135.0,
+   "latency_max_s": 258.6,
+   "all_jpeg_saved_after_last_shot_s": null
+  },
+  {
+   "scenario": "rafale10",
+   "rate_mb_s": 25,
+   "files": 70,
+   "saved": 70,
+   "db_photos": 70,
+   "unsaved": 0,
+   "shooting_s": 10.2,
+   "drain_after_last_shot_s": 159.6,
+   "latency_median_s": 84.4,
+   "latency_max_s": 159.6,
+   "all_jpeg_saved_after_last_shot_s": null
+  },
+  {
+   "scenario": "rafale10",
+   "rate_mb_s": 35,
+   "files": 70,
+   "saved": 70,
+   "db_photos": 70,
+   "unsaved": 0,
+   "shooting_s": 10.3,
+   "drain_after_last_shot_s": 118.1,
+   "latency_median_s": 62.9,
+   "latency_max_s": 118.1,
+   "all_jpeg_saved_after_last_shot_s": null
+  }
+ ]
+}

@@ -287,7 +287,7 @@ def step_config(ctx: Context) -> dict[str, Any]:
     if values is None:
         ctx.ui.say("  configuration non disponible avec cet appareil ou ce pilote")
         return {"available": False}
-    (ctx.out_dir / "camera_config.json").write_text(json.dumps(values, indent=1, ensure_ascii=False))
+    (ctx.out_dir / "camera_config.json").write_text(json.dumps(values, indent=1, ensure_ascii=False), encoding="utf-8", errors="replace")
     interesting = {k: v for k, v in values.items()
                    if any(s in k.lower() for s in ("deviceversion", "serialnumber", "batterylevel",
                                                    "capturetarget", "recordingmedia", "manufacturer",
@@ -426,16 +426,16 @@ def step_burst(ctx: Context) -> dict[str, Any]:
         refresh = not (ctx.result("detection").get("new_files_without_refresh", 0) > 0)
         downloader = Downloader(db, ctx.source, work / "sd")
         download_time = [0.0]
-        plain_download = downloader.download
+        plain_drain = downloader.drain
 
-        def timed_download(photo):  # mesure le temps passé à télécharger, hors attente de la rafale
+        def timed_drain(*args, **kwargs):  # temps passé à télécharger, hors attente de la rafale
             t = time.monotonic()
             try:
-                return plain_download(photo)
+                return plain_drain(*args, **kwargs)
             finally:
                 download_time[0] += time.monotonic() - t
 
-        downloader.download = timed_download
+        downloader.drain = timed_drain
         w = Watcher(db, ctx.source, downloader, refresh_each_poll=refresh)
         w.ignore_existing()
         done = threading.Event()
@@ -646,7 +646,7 @@ STEPS = [
 
 def _save_state(out_dir: Path, state: dict[str, Any]) -> None:
     tmp = out_dir / (STATE_FILE + ".tmp")
-    tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False, default=str))
+    tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False, default=str), encoding="utf-8", errors="replace")
     os.replace(tmp, out_dir / STATE_FILE)
 
 
@@ -726,8 +726,8 @@ def _toml(d: dict[str, Any]) -> str:
 def write_reports(out_dir: Path, state: dict[str, Any]) -> None:
     rec = recommend(state)
     report = {"steps": state["steps"], "recommended": rec}
-    (out_dir / "probe_report.json").write_text(json.dumps(report, indent=1, ensure_ascii=False, default=str))
-    (out_dir / "config.recommended.toml").write_text(_toml(rec))
+    (out_dir / "probe_report.json").write_text(json.dumps(report, indent=1, ensure_ascii=False, default=str), encoding="utf-8", errors="replace")
+    (out_dir / "config.recommended.toml").write_text(_toml(rec), encoding="utf-8", errors="replace")
     md = ["# Rapport de sonde", "", "| Étape | Résultat | Détail |", "|---|---|---|"]
     for step in STEPS:
         e = state["steps"].get(step.id)
@@ -738,7 +738,7 @@ def write_reports(out_dir: Path, state: dict[str, Any]) -> None:
         md.append(f"| {step.title} | {mark} | {_summary(step.id, e)} |")
     md += ["", "## Configuration recommandée", "", "```toml", _toml(rec), "```", "",
            "Journaux libgphoto2 complets : `logs/`. Détails : `probe_report.json`."]
-    (out_dir / "probe_report.md").write_text("\n".join(md))
+    (out_dir / "probe_report.md").write_text("\n".join(md), encoding="utf-8", errors="replace")
 
 
 def _summary(step_id: str, e: dict[str, Any]) -> str:

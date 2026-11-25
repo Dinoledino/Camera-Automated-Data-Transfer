@@ -35,6 +35,31 @@ vérifiée sur l'A50 : 46 s à 6 Mo/s (le retard s'accumule), 21 s à 15 Mo/s, 1
    déclenche moins d'une fois toutes les 9 s environ, mais une rafale de 10 s demande ~13 min de
    vidange. À 25-35 Mo/s, la même rafale se vide en 3 à 5 minutes.
 
+## Après correction : recouvrement et vidange par tranches (même jour)
+
+Le downloader vérifie maintenant une photo (fsync, relecture, hash) pendant le transfert de la
+suivante, et la vidange rend la main toutes les 10 s pour que les nouveaux JPEG passent devant.
+
+| Mesure (accélération ×10) | PC avant | PC après | A50 avant | A50 après |
+|---|---|---|---|---|
+| Rafale 10 s RAW à 35 Mo/s : vidange | 149 s | **118 s** | 203 s | 205 s |
+| Rafale 10 s RAW à 25 Mo/s : vidange | 189 s | **160 s** | 276 s | **246 s** |
+| Rafale 3 s RAW + JPEG à 35 Mo/s : tous les JPEG | 35 s | **27 s** | 82 s | **55 s** |
+| Rafale 3 s RAW + JPEG à 6 Mo/s : tous les JPEG | 144 s | **77 s** | 229 s | **123 s** |
+
+Sur l'A50, avec une accélération ×2 seulement (rafale 10 s RAW à 35 Mo/s) : vidange **157 s en
+séquentiel, 142 s avec recouvrement**.
+
+**Les chiffres du banc sur l'A50 sont pessimistes**, pour deux raisons propres à la simulation :
+- la carte de l'appareil simulé est sur le même stockage que la sauvegarde : le téléphone écrit
+  les fichiers « de l'appareil », les relit, puis écrit les copies (en vrai, la carte est dans le
+  D850 et la lecture passe par l'USB). La rafale de 10 s a d'ailleurs duré 20 à 24 s sur l'A50 :
+  il ne suivait pas 7 i/s d'écriture en plus du reste ;
+- l'accélération du temps multiplie les coûts fixes par fichier (écritures en base avec fsync),
+  réels sur le téléphone.
+
+Le gain réel du recouvrement sur l'A50 se mesurera donc avec le vrai lien USB (faux Nikon, D850).
+
 ## À mesurer encore
 
 Le débit PTP réel (faux Nikon, puis D850) et l'écriture sur microSD : ce sont eux qui diront

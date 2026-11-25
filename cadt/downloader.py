@@ -1,12 +1,18 @@
 """Téléchargement vérifié des photos, de l'appareil vers la microSD (phase 3, étape 2).
 
 Pour une photo, dans cet ordre :
-1. écrire le contenu dans un fichier `.part` caché, en calculant le SHA-256 au passage ;
-2. vérifier la taille, puis faire un `fsync` du `.part` → état `downloaded` ;
-3. vider le cache de pages du fichier, puis le relire depuis la microSD et recalculer le hash ;
-4. si les deux hash sont identiques : renommer de façon atomique le `.part` en fichier final,
-   faire un `fsync` du dossier → état `verified`.
-   Sinon : supprimer le `.part`, et la photo repart dans la file.
+1. transfert : écrire le contenu dans un fichier `.part` caché, en calculant le SHA-256
+   au passage, et vérifier la taille reçue ;
+2. vérification sur disque : `fsync` du `.part`, vidage du cache de pages, relecture
+   depuis la microSD et nouveau calcul du hash ;
+3. finalisation : état `downloaded`, puis, si les deux hash sont identiques, renommage
+   atomique du `.part` en fichier final, `fsync` du dossier → état `verified`.
+   Sinon : suppression du `.part`, et la photo repart dans la file.
+
+En vidange (drain), l'étape 2 d'une photo se fait dans un fil séparé pendant l'étape 1 de
+la suivante : le travail local ne s'ajoute plus au temps de transfert USB. Ce fil ne touche
+qu'au fichier `.part` ; la base, le renommage et le passage à `verified` restent dans le fil
+principal, dans l'ordre ci-dessus.
 
 Seul le renommage rend le fichier « réel ». Après une coupure à n'importe quelle étape,
 `recover()` remet les photos interrompues dans la file et supprime les `.part` orphelins.
@@ -19,6 +25,8 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -81,6 +89,16 @@ class DiskFull(Exception):
     """Plus de place sur la microSD : on arrête la file proprement."""
 
 
+@dataclass
+class _InFlight:
+    """Photo transférée dont la vérification sur disque est en cours ou à faire."""
+    photo: Photo
+    part: Path
+    final: Path
+    sha: str
+    future: Future[str] | None = None
+
+
 @dataclass(frozen=True)
 class Outcome:
     photo: Photo
@@ -118,12 +136,18 @@ def _utc_clock() -> datetime:
 class Downloader:
     def __init__(self, db: Database, source: Source, dest_root: str | Path,
                  policy: RetryPolicy = RetryPolicy(),
-                 clock: Callable[[], datetime] = _utc_clock):
+                 clock: Callable[[], datetime] = _utc_clock,
+                 pipelined: bool = True,
+                 on_outcome: Callable[[Outcome], None] | None = None,
+                 timer: Callable[[], float] = time.monotonic):
         self.db = db
         self.source = source
         self.dest_root = Path(dest_root)
         self.policy = policy
         self.clock = clock  # remplaçable dans les tests
+        self.pipelined = pipelined
+        self.on_outcome = on_outcome  # appelé à chaque photo terminée (mesures, interface)
+        self.timer = timer
 
     # ---------------------------------------------------------- chemins
 
@@ -159,18 +183,46 @@ class Downloader:
     def download(self, photo: Photo) -> Outcome:
         """Télécharge et vérifie une photo déjà passée en `downloading` (voir claim_next).
 
-        Lève SourceDisconnected ou DiskFull après avoir remis la photo dans la file :
-        ce sont des erreurs qui empêchent de traiter les photos suivantes.
+        Version sans recouvrement (transfert puis vérification). Lève SourceDisconnected ou
+        DiskFull après avoir remis la photo dans la file : ces erreurs empêchent de traiter
+        les photos suivantes.
         """
+        item = self._transfer(photo)
+        if isinstance(item, Outcome):
+            return item
+        return self._finalize(item)
+
+    def _transfer(self, photo: Photo) -> "_InFlight | Outcome":
+        """Étape 1 (fil principal) : appareil → .part, hash calculé au passage. Pas encore de fsync."""
         final = self.final_path(photo)
         part = self.part_path(photo)
         try:
             final.parent.mkdir(parents=True, exist_ok=True)
             fsync_dir(final.parent.parent)
             sha = self._write_part(photo, part)
-            self.db.mark_downloaded(photo.id, sha)
+        except (SourceError, OSError) as e:
+            return self._on_error(photo, part, e)
+        return _InFlight(photo, part, final, sha)
 
-            reread = sha256_file(part)
+    @staticmethod
+    def _verify_on_disk(part: Path) -> str:
+        """Étape 2 (peut tourner dans un autre fil) : fsync, puis relecture depuis le disque.
+
+        Ne touche PAS à la base : seules des opérations sur le fichier .part.
+        """
+        fd = os.open(part, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return sha256_file(part)
+
+    def _finalize(self, item: "_InFlight") -> Outcome:
+        """Étape 3 (fil principal) : base de données, comparaison des hash, renommage."""
+        photo, part, final, sha = item.photo, item.part, item.final, item.sha
+        try:
+            reread = item.future.result() if item.future is not None else self._verify_on_disk(part)
+            self.db.mark_downloaded(photo.id, sha)
             if reread != sha:
                 # mark_verified journalise l'écart, remet la photo dans la file et lève HashMismatch.
                 remove_quietly(part)
@@ -180,30 +232,42 @@ class Downloader:
                     retry_at, give_up = self._retry_plan(photo)
                     return Outcome(self.db.schedule_retry(photo.id, retry_at, give_up), False, str(e))
                 raise AssertionError("mark_verified aurait dû lever HashMismatch")
-
             os.replace(part, final)
             fsync_dir(final.parent)
             return Outcome(self.db.mark_verified(photo.id, str(final), reread), True)
+        except (SourceError, OSError) as e:
+            return self._on_error(photo, part, e)
 
-        except SourceDisconnected as e:
+    def _on_error(self, photo: Photo, part: Path, e: Exception) -> Outcome:
+        """Remet la photo dans la file selon le type d'erreur ; lève si la file doit s'arrêter."""
+        if isinstance(e, SourceDisconnected):
             # Pas la faute de la photo : ni pénalité ni délai, elle repart au rebranchement.
             self._fail(photo, part, f"appareil déconnecté : {e}", blame_photo=False)
-            raise
-        except OSError as e:
+            raise e
+        if isinstance(e, OSError):
             if e.errno in (errno.ENOSPC, errno.EDQUOT):
                 self._fail(photo, part, "microSD pleine", blame_photo=False)
                 raise DiskFull(str(e)) from e
             self._fail(photo, part, f"erreur disque : {e}")
-            raise
-        except SourceBusy as e:
+            raise e
+        if isinstance(e, SourceBusy):
             # Pas la faute de la photo : tentative non comptée, nouvel essai un peu plus tard.
             remove_quietly(part)
             retry_at = iso_utc(self.clock() + timedelta(seconds=self.policy.busy_delay))
             failed = self.db.mark_failed(photo.id, str(e), retry_at=retry_at, count_attempt=False)
             return Outcome(failed, False, str(e))
-        except SourceError as e:
-            failed = self._fail(photo, part, str(e))
-            return Outcome(failed, False, str(e))
+        failed = self._fail(photo, part, str(e))
+        return Outcome(failed, False, str(e))
+
+    def _abandon(self, item: "_InFlight", reason: str) -> None:
+        """Photo transférée mais pas finalisée (arrêt de la file) : elle repart, sans pénalité."""
+        if item.future is not None:
+            try:
+                item.future.result()
+            except Exception:
+                pass
+        remove_quietly(item.part)
+        self.db.mark_failed(item.photo.id, reason, count_attempt=False)
 
     def _write_part(self, photo: Photo, part: Path) -> str:
         h = hashlib.sha256()
@@ -213,8 +277,6 @@ class Downloader:
                 f.write(chunk)
                 h.update(chunk)
                 written += len(chunk)
-            f.flush()
-            os.fsync(f.fileno())
         if written != photo.size:
             raise SourceError(f"taille reçue {written} octets, attendue {photo.size}")
         return h.hexdigest()
@@ -235,16 +297,65 @@ class Downloader:
 
     # ---------------------------------------------------------- la file
 
-    def drain(self) -> list[Outcome]:
-        """Télécharge tout ce qui est prêt dans la file, puis rend la main.
+    def drain(self, max_seconds: float | None = None) -> list[Outcome]:
+        """Télécharge ce qui est prêt dans la file, puis rend la main.
+
+        max_seconds : ne prend plus de nouvelle photo au-delà (la photo en cours se termine).
+        Le watcher s'en sert pour relister l'appareil régulièrement pendant une longue
+        vidange : les JPEG des prises suivantes passent alors devant les NEF en attente.
+
+        Avec `pipelined` (par défaut), la vérification sur disque d'une photo (fsync,
+        relecture, hash) se fait pendant le transfert de la suivante.
 
         Les photos en attente de nouvelle tentative sont laissées pour plus tard :
         `seconds_until_next_retry()` dit quand revenir. S'arrête sur SourceDisconnected
-        ou DiskFull (propagées à l'appelant).
+        ou DiskFull (propagées à l'appelant), après avoir finalisé la photo précédente.
         """
         outcomes: list[Outcome] = []
-        while (photo := self.db.claim_next(now=iso_utc(self.clock()))) is not None:
-            outcomes.append(self.download(photo))
+
+        def emit(outcome: Outcome) -> None:
+            outcomes.append(outcome)
+            if self.on_outcome is not None:
+                self.on_outcome(outcome)
+
+        start = self.timer()
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="verify") if self.pipelined else None
+        pending: _InFlight | None = None
+        try:
+            while max_seconds is None or self.timer() - start < max_seconds:
+                photo = self.db.claim_next(now=iso_utc(self.clock()))
+                if photo is None:
+                    break
+                try:
+                    item = self._transfer(photo)
+                except BaseException:
+                    if pending is not None:
+                        item_before, pending = pending, None
+                        emit(self._finalize(item_before))
+                    raise
+                if isinstance(item, Outcome):
+                    emit(item)
+                    continue
+                if executor is None:
+                    emit(self._finalize(item))
+                    continue
+                item.future = executor.submit(self._verify_on_disk, item.part)
+                if pending is not None:
+                    item_before, pending = pending, None
+                    try:
+                        emit(self._finalize(item_before))
+                    except BaseException:
+                        self._abandon(item, "file arrêtée avant la vérification")
+                        raise
+                pending = item
+            if pending is not None:
+                item_before, pending = pending, None
+                emit(self._finalize(item_before))
+        finally:
+            if pending is not None:  # sortie anormale (exception inattendue) : rien n'est perdu
+                self._abandon(pending, "file interrompue avant la vérification")
+            if executor is not None:
+                executor.shutdown(wait=True)
         return outcomes
 
     def seconds_until_next_retry(self) -> float | None:

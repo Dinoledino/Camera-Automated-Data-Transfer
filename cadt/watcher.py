@@ -53,7 +53,8 @@ class PollResult:
 class Watcher:
     def __init__(self, db: Database, lister: Lister, downloader: Downloader,
                  stable_polls: int = 2, refresh_each_poll: bool = True,
-                 indexer: "Indexer | None" = None, index_budget_seconds: float = 1.0):
+                 indexer: "Indexer | None" = None, index_budget_seconds: float = 1.0,
+                 drain_budget_seconds: float = 10.0):
         self.db = db
         self.lister = lister
         self.downloader = downloader
@@ -61,6 +62,9 @@ class Watcher:
         self.refresh_each_poll = refresh_each_poll
         self.indexer = indexer
         self.index_budget_seconds = index_budget_seconds
+        # Une vidange rend la main au bout de ce temps : on relit l'appareil, et les JPEG des
+        # prises suivantes passent devant les NEF qui attendent encore.
+        self.drain_budget_seconds = drain_budget_seconds
         self._known: set[tuple] = set()               # déjà enregistrés en base
         self._candidates: dict[tuple[str, str], tuple[tuple, int]] = {}  # (dossier, nom) → (clé, vu n fois)
 
@@ -104,7 +108,7 @@ class Watcher:
         for where in list(self._candidates):
             if where not in present:
                 del self._candidates[where]
-        result.outcomes = self.downloader.drain()
+        result.outcomes = self.downloader.drain(max_seconds=self.drain_budget_seconds)
         # L'indexation ne passe que quand plus rien n'attend d'être sauvegardé (pas de fichier
         # en cours de stabilisation, file vide), et seulement le temps imparti : sur l'A50, un
         # NEF coûte ~1,5 s d'indexation, qu'on ne veut pas voler à une rafale en cours.
@@ -123,13 +127,20 @@ class Watcher:
         """Boucle principale : tourne jusqu'à should_stop() ou carte pleine."""
         self.downloader.recover()
         while not should_stop():
+            started = time.monotonic()
             try:
                 r = self.poll_once()
                 if r.new or r.outcomes:
                     log.info("%d nouvelles, %d sauvegardées, %d échecs, %d non sauvegardées au total",
                              r.new, r.saved, len(r.outcomes) - r.saved, self.db.count_unsaved())
+                # L'intervalle compte depuis le début du passage : après une longue vidange,
+                # on relit tout de suite (la stabilité reste mesurée sur des passages espacés).
+                wait = interval - (time.monotonic() - started)
                 retry = self.downloader.seconds_until_next_retry()
-                sleep(max(min(interval, retry), 0.1) if retry is not None else interval)
+                if retry is not None:
+                    wait = min(wait, max(retry, 0.1))
+                if wait > 0:
+                    sleep(wait)
             except SourceDisconnected as e:
                 log.warning("appareil injoignable (%s) ; nouvel essai dans %.0f s", e, reconnect_delay)
                 self._candidates.clear()

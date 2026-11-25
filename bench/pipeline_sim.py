@@ -50,7 +50,8 @@ SCENARIOS = {
 }
 
 
-def run_scenario(name: str, spec: dict, rate: float, k: float, work: Path) -> dict:
+def run_scenario(name: str, spec: dict, rate: float, k: float, work: Path,
+                 pipelined: bool = True, drain_budget: float = 10.0) -> dict:
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     card, sd = work / "card", work / "sd"
@@ -78,17 +79,12 @@ def run_scenario(name: str, spec: dict, rate: float, k: float, work: Path) -> di
 
     with Database(work / "b.db") as db:
         source = ThrottledSource(DirectorySource(card), rate, per_file_latency=PTP_LATENCY / k)
-        dl = Downloader(db, source, sd)
-        plain = dl.download
-
-        def timed(photo):
-            out = plain(photo)
+        def on_outcome(out):
             if out.ok:
-                saved_at[photo.name] = time.monotonic()
-            return out
+                saved_at[out.photo.name] = time.monotonic()
 
-        dl.download = timed
-        w = Watcher(db, DirectoryLister(card), dl)
+        dl = Downloader(db, source, sd, pipelined=pipelined, on_outcome=on_outcome)
+        w = Watcher(db, DirectoryLister(card), dl, drain_budget_seconds=drain_budget / k)
         t_start = time.monotonic()
         threading.Thread(target=shooter, daemon=True).start()
         deadline = t_start + 3600 / k
@@ -152,15 +148,19 @@ def main() -> int:
     ap.add_argument("--scale", type=float, default=10)
     ap.add_argument("--scenarios", nargs="+", default=list(SCENARIOS), choices=list(SCENARIOS))
     ap.add_argument("--label", default="pc")
+    ap.add_argument("--sequential", action="store_true", help="sans recouvrement (comparaison)")
+    ap.add_argument("--drain-budget", type=float, default=10.0, help="s réelles par vidange (défaut 10)")
     ap.add_argument("--dir", type=Path, default=None, help="dossier de travail (défaut : temporaire)")
     ap.add_argument("--out", type=Path, default=Path(__file__).parent / "resultats")
     a = ap.parse_args()
     base = a.dir or Path(tempfile.mkdtemp(prefix="cadt-bench-"))
-    res = {"label": a.label, "date": datetime.now().isoformat(timespec="seconds"), "scale": a.scale, "runs": []}
+    res = {"label": a.label, "date": datetime.now().isoformat(timespec="seconds"), "scale": a.scale,
+           "pipelined": not a.sequential, "drain_budget": a.drain_budget, "runs": []}
     for sc in a.scenarios:
         for rate in a.rates:
             print(f"{sc} à {rate:g} Mo/s…", file=sys.stderr, flush=True)
-            r = run_scenario(sc, SCENARIOS[sc], rate, a.scale, base / "work")
+            r = run_scenario(sc, SCENARIOS[sc], rate, a.scale, base / "work",
+                             pipelined=not a.sequential, drain_budget=a.drain_budget)
             print(f"  {r}", file=sys.stderr, flush=True)
             res["runs"].append(r)
     a.out.mkdir(parents=True, exist_ok=True)
