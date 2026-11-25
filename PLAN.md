@@ -37,13 +37,21 @@ Concrètement, faire de l'A50 un compagnon de prise de vue :
   redémarrage de l'application). Fichiers en corbeille déplacés (renommage atomique) dans un dossier
   caché du même emplacement de stockage. Téléphone plein : la corbeille est vidée en premier, des plus
   anciennes aux plus récentes, et le journal le signale.
-- **Usage terrain** : téléphone branché pendant toute la séance, ou branché pendant les pauses pour
-  vider la carte : les deux doivent bien marcher (réactivité dans un cas, vitesse de vidange dans l'autre).
-- **Mode « Sauvegarde » du D850** (même photo sur les deux cartes) : les deux exemplaires sont effacés
-  après vérification de la copie.
-- **Vidéos (MOV)** : récupérées et effacées comme les photos ; pas d'aperçu pour l'instant.
-- **Tri et logiciels de retouche** : favoris, gardées et rejetées écrits aussi dans des fichiers XMP à côté
-  des photos, relus par Lightroom et darktable.
+- **Usage terrain** : le téléphone est **fixé sous le D850** dans un support imprimé en 3D et reste
+  branché pendant toute la séance : la réactivité (photo copiée vite) prime. Points à vérifier :
+  charge du téléphone pendant l'OTG (adaptateur avec charge ? pris en charge par l'A50 ? **À VÉRIFIER**),
+  chauffe dans le support (laisser respirer le dos), pas de vis de trépied reporté sous le support.
+- **Cartes du D850** : deux logements amovibles, XQD (ou CFexpress B) et SD ; pas de mémoire interne.
+  Cartes utilisées et rôle de la 2e carte : à relever sur l'appareil (la sonde les détecte). En mode
+  « Sauvegarde » (même photo sur les deux cartes), les deux exemplaires sont effacés après vérification.
+- **Vidéos (MOV)** : récupérées et effacées comme les photos, **en dernier dans la file** (après tous les
+  RAW et JPEG) ; pas d'aperçu pour l'instant.
+- **Retouche** : souhaitée **sur le téléphone**, logiciels encore à choisir (faisabilité en discussion).
+  Conséquence pour la phase 0bis : les applications de retouche Android (Lightroom Mobile, Snapseed…,
+  prise en charge des NEF du D850 à vérifier) exigent de garder Android (options A ou B) ; postmarketOS
+  (option C) ne laisse que des logiciels Linux (darktable…), peu adaptés à un écran de téléphone.
+  Favoris, gardées et rejetées sont aussi écrits dans des fichiers XMP à côté des photos (relus par
+  Lightroom, darktable et d'autres).
 
 ## 2. Matériel et faits établis
 
