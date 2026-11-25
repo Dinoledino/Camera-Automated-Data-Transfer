@@ -1,0 +1,46 @@
+{
+ "label": "a50-interne",
+ "date": "2026-11-25T10:55:54",
+ "dir": "/data/data/com.termux/files/home/bench-tmp",
+ "machine": {
+  "platform": "Android-11-aarch64-64bit",
+  "machine": "aarch64",
+  "python": "3.14.10",
+  "cpus": 8,
+  "cpu_max_mhz": [
+   1742,
+   2314
+  ],
+  "mem_total_mb": 3604
+ },
+ "storage": {
+  "size_mb": 1024,
+  "write_mb_s": 188.4,
+  "read_mb_s": 398.3,
+  "read_cached_mb_s": 412.6,
+  "read_is_probably_cached": true
+ },
+ "cpu": {
+  "sha256_50mb_memory_s": 0.044,
+  "sha256_mb_s": 1146.8,
+  "sha256_50mb_file_s": 0.222
+ },
+ "pipeline": {
+  "files": 5,
+  "verified": 5,
+  "file_mb": 52.6,
+  "seconds": 3.65,
+  "seconds_per_file": 0.73,
+  "mb_s": 72.2
+ },
+ "index": {
+  "exiftool_first_call_s": 0.825,
+  "exiftool_next_call_s": 0.077,
+  "index_nef_s": [
+   1.41,
+   1.4,
+   1.68
+  ]
+ },
+ "max_rss_mb": 116
+}
