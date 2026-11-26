@@ -261,3 +261,21 @@ if (startSelect) {
       .catch(() => { toast("Impossible de déplacer : réessaie."); doMove.disabled = false; });
   });
 }
+
+// ---------------------------------------------------------------- réglages (enregistrés dès qu'on les touche)
+
+document.addEventListener("change", (ev) => {
+  const el = ev.target;
+  let body = null;
+  if (el.dataset.detail) body = { key: "details", value: { [el.dataset.detail]: el.checked } };
+  else if (el.dataset.setting === "auto_delete") body = { key: "auto_delete", value: el.checked };
+  else if (el.dataset.setting) body = { key: el.dataset.setting, value: el.value };
+  if (!body) return;
+  post("/api/reglages", body)
+    .then(() => {
+      // Apparence et texte d'aide dépendent du réglage : on recharge la page.
+      if (["theme", "accent", "auto_delete"].includes(body.key)) location.reload();
+      else toast("Enregistré");
+    })
+    .catch(() => { toast("Impossible d'enregistrer : réessaie."); location.reload(); });
+});

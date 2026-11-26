@@ -292,3 +292,50 @@ def test_real_file_names_are_shown(env):
     r = client.get(f"/?s={sid}")
     assert f'<span class="ellipsis">…{renamed[-15:]}</span>' in r.text
     assert renamed in text(client.get(f"/photo/{ids[0]}").text)
+
+
+def test_settings_page_and_saving(env):
+    client, ids, tmp, pool = env
+    r = client.get("/reglages")
+    assert r.status_code == 200
+    t = text(r.text)
+    for s in ("Apparence", "Taille des miniatures", "Informations affichées en plein écran",
+              "Effacer chaque photo de l'appareil", "Mémoire du téléphone", "Garder les photos dans la corbeille",
+              "Journal des événements", "3 photos ne sont que sur le téléphone"):
+        assert s in t, s
+    assert not JARGON.search(t), JARGON.search(t)
+    assert 'value="24" data-setting="trash_delay" checked' in r.text
+
+    save = lambda k, v: client.post("/api/reglages", json={"key": k, "value": v}, headers=H)  # noqa: E731
+    assert client.post("/api/reglages", json={"key": "theme", "value": "clair"}).status_code == 403
+    assert save("theme", "fluo").status_code == 400 and save("inconnu", 1).status_code == 400
+    assert save("details", {"pirate": True}).status_code == 400
+
+    assert save("theme", "clair").json() == {"ok": True}
+    assert save("accent", "bleu").json() == {"ok": True}
+    assert save("thumbs", "grandes").json() == {"ok": True}
+    r = client.get("/")
+    assert "theme-clair accent-bleu" in r.text and "--cols: 2" in r.text
+
+    assert save("details", {"fichier": False, "heure": False}).json() == {"ok": True}
+    with Database(tmp / "c.db") as db:
+        name = db.get(ids[0]).name
+    r = client.get(f"/photo/{ids[0]}")
+    assert f'<strong class="ellipsis">{name}' not in r.text      # nom masqué (il reste dans le titre de l'onglet)
+    assert " · " not in r.text.split('<small class="muted">')[1].split("</small>")[0]  # plus d'heure
+
+    assert save("trash_delay", "168").json() == {"ok": True}
+    assert save("auto_delete", False).json() == {"ok": True}
+    with Database(tmp / "c.db") as db:
+        assert Trash(db, pool).delay.total_seconds() == 168 * 3600
+        assert not db.auto_delete_enabled()
+    assert "restent aussi sur la carte" in text(client.get("/reglages").text)
+    assert save("auto_delete", "oui").status_code == 400   # booléen exigé
+
+
+def test_storage_label():
+    from pathlib import Path
+    from cadt.web.app import storage_label
+    assert storage_label(Path("/storage/emulated/0/DCIM/D850")) == "Mémoire interne"
+    assert storage_label(Path("/storage/1A2B-3C4D/D850")) == "Carte SD"
+    assert storage_label(Path("/data/data/com.termux/files/home/demo/carte")) == "Carte SD"

@@ -13,6 +13,7 @@ Vocabulaire de l'interface : sans jargon technique (voir PLAN.md, maquette valid
 from __future__ import annotations
 
 import json
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -37,6 +38,17 @@ HERE = Path(__file__).parent
 MONTHS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre",
           "octobre", "novembre", "décembre"]
 DEFAULT_DETAILS = {"reglages": True, "objectif": True, "heure": True, "fichier": True}
+# Réglages d'apparence : (valeur par défaut, valeurs permises)
+THEMES = {"sombre": "Sombre", "clair": "Clair"}
+ACCENTS = {"jaune": "Jaune", "bleu": "Bleu", "vert": "Vert", "orange": "Orange"}
+THUMBS = {"petites": ("Petites", 4), "moyennes": ("Moyennes", 3), "grandes": ("Grandes", 2)}
+TRASH_DELAYS = {"1": "1 heure", "24": "24 heures", "168": "7 jours"}
+DETAILS = [  # (clé, libellé, exemple)
+    ("reglages", "Réglages de prise de vue", "35 mm · f/9 · 1/160 s · ISO 64"),
+    ("objectif", "Appareil et objectif", "NIKON D850 · 35 mm f/1.4"),
+    ("heure", "Date et heure", "23 novembre 2026 · 14:32:05"),
+    ("fichier", "Nom du fichier", "DSC_0044.NEF"),
+]
 PLACEHOLDER_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3 2">'
                    '<rect width="3" height="2" fill="#26282D"/></svg>')
 
@@ -74,6 +86,14 @@ def short_name(name: str, width: int = 16) -> str:
     return name if len(name) <= width else "…" + name[-(width - 1):]
 
 
+def storage_label(root: Path) -> str:
+    """« Mémoire interne » ou « Carte SD », d'après le chemin de l'emplacement."""
+    p = root.as_posix().lower()
+    if re.search(r"/storage/[0-9a-f]{4}-[0-9a-f]{4}", p) or re.search(r"(^|/)(carte|sd|microsd)[^/]*$", p):
+        return "Carte SD"
+    return "Mémoire interne"
+
+
 def local_time(iso: str) -> str:
     """Horodatage UTC de la base → « à 14:52 » aujourd'hui, sinon « le 23 novembre à 14:52 »."""
     d = datetime.fromisoformat(iso).astimezone()
@@ -91,6 +111,17 @@ def duration(seconds: float) -> str:
 
 def create_app(config: WebConfig) -> Starlette:
     templates = Jinja2Templates(directory=str(HERE / "templates"))
+    def appearance() -> dict:
+        """Thème, couleur et taille des miniatures : lus à chaque page (base.html)."""
+        with db() as d:
+            theme = d.get_setting("ui_theme", "sombre")
+            accent = d.get_setting("ui_accent", "jaune")
+            thumbs = d.get_setting("ui_thumbs", "moyennes")
+        return {"theme": theme if theme in THEMES else "sombre",
+                "accent": accent if accent in ACCENTS else "jaune",
+                "cols": THUMBS.get(thumbs, THUMBS["moyennes"])[1]}
+
+    templates.env.globals["appearance"] = appearance
     templates.env.filters["human_size"] = human_size
     templates.env.filters["file_name"] = file_name
     templates.env.filters["short_name"] = short_name
@@ -228,6 +259,33 @@ def create_app(config: WebConfig) -> Starlette:
             }
         return templates.TemplateResponse(request, "trash.html", ctx)
 
+    async def settings_page(request: Request):
+        with db() as d:
+            trash = Trash(d, config.pool)
+            details = {**DEFAULT_DETAILS, **json.loads(d.get_setting("ui_details", "{}"))}
+            usage = config.pool.usage()
+            delay = f"{trash.delay.total_seconds() / 3600:g}"
+            ctx = {
+                "request": request, "tab": "reglages",
+                "theme": d.get_setting("ui_theme", "sombre"), "themes": THEMES,
+                "accent": d.get_setting("ui_accent", "jaune"), "accents": ACCENTS,
+                "thumbs": d.get_setting("ui_thumbs", "moyennes"),
+                "thumb_sizes": {k: v[0] for k, v in THUMBS.items()},
+                "details": [(k, label, ex, details.get(k, True)) for k, label, ex in DETAILS],
+                "auto_delete": d.auto_delete_enabled(),
+                "only_on_phone": q.copy_status(d).only_on_phone,
+                "storages": [{"label": f"{i}. {storage_label(u.root)}" if len(usage) > 1 else storage_label(u.root),
+                              "free": u.free, "total": u.total,
+                              "percent": round(100 * u.used / u.total) if u.total else 0}
+                             for i, u in enumerate(usage, 1)],
+                "photos_left": config.pool.free_for_photos() // (50 * 1024 * 1024),
+                "several": len(usage) > 1,
+                "rejected": q.rejected_count(d),
+                "trashed": len(d.trashed_photos()),
+                "delay": delay if delay in TRASH_DELAYS else None, "delays": TRASH_DELAYS,
+            }
+        return templates.TemplateResponse(request, "settings.html", ctx)
+
     async def soon_page(request: Request):
         tab = request.url.path.strip("/")
         titles = {"reglages": "Réglages", "journal": "Journal"}
@@ -352,6 +410,27 @@ def create_app(config: WebConfig) -> Starlette:
             freed = trash.purge([p.id for p in d.trashed_photos()])
             return JSONResponse({"freed": freed})
 
+    async def save_setting(request: Request):
+        body = await request.json()
+        key, value = body.get("key"), body.get("value")
+        with db() as d:
+            if key == "theme" and value in THEMES:
+                d.set_setting("ui_theme", value)
+            elif key == "accent" and value in ACCENTS:
+                d.set_setting("ui_accent", value)
+            elif key == "thumbs" and value in THUMBS:
+                d.set_setting("ui_thumbs", value)
+            elif key == "trash_delay" and value in TRASH_DELAYS:
+                Trash(d, config.pool).set_delay_hours(float(value))
+            elif key == "auto_delete" and isinstance(value, bool):
+                d.set_auto_delete(value)
+            elif key == "details" and isinstance(value, dict) and set(value) <= {k for k, *_ in DETAILS}:
+                current = json.loads(d.get_setting("ui_details", "{}"))
+                d.set_setting("ui_details", json.dumps({**current, **{k: bool(v) for k, v in value.items()}}))
+            else:
+                return JSONResponse({"erreur": "réglage inconnu"}, status_code=400)
+        return JSONResponse({"ok": True})
+
     async def status_api(request: Request):
         with db() as d:
             st = q.copy_status(d)
@@ -363,7 +442,7 @@ def create_app(config: WebConfig) -> Starlette:
         Route("/sessions", sessions_page),
         Route("/rejet", reject_page),
         Route("/corbeille", trash_page),
-        Route("/reglages", soon_page),
+        Route("/reglages", settings_page),
         Route("/journal", soon_page),
         Route("/photo/{photo_id:int}", photo_page),
         Route("/media/thumb/{photo_id:int}", thumb),
@@ -372,6 +451,7 @@ def create_app(config: WebConfig) -> Starlette:
         Route("/api/photo/{photo_id:int}/flag", guarded(set_flag), methods=["POST"]),
         Route("/api/sessions", guarded(create_session), methods=["POST"]),
         Route("/api/sessions/active", guarded(set_active), methods=["POST"]),
+        Route("/api/reglages", guarded(save_setting), methods=["POST"]),
         Route("/api/deplacer", guarded(move), methods=["POST"]),
         Route("/api/corbeille/mettre", guarded(trash_put), methods=["POST"]),
         Route("/api/corbeille/recuperer", guarded(trash_restore), methods=["POST"]),

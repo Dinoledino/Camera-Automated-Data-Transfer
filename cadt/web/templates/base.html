@@ -7,7 +7,8 @@
 <title>{% block title %}Photos{% endblock %}</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
-<body class="{% block body_class %}{% endblock %}">
+{% set ui = appearance() %}
+<body class="{% block body_class %}{% endblock %} theme-{{ ui.theme }} accent-{{ ui.accent }}" style="--cols: {{ ui.cols }}">
 {% block content %}{% endblock %}
 {% block nav %}
 <nav class="tabs" aria-label="Navigation">

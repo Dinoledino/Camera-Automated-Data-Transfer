@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Réglages{% endblock %}
+{% block content %}
+<div class="page">
+<header class="head"><h1>Réglages</h1></header>
+<main class="stack settings">
+
+<section class="stack tight">
+  <h2 class="group">Apparence</h2>
+  <fieldset class="field">
+    <legend>Thème</legend>
+    <div class="segments">
+      {% for k, label in themes.items() %}
+      <label><input type="radio" name="theme" value="{{ k }}" data-setting="theme" {{ 'checked' if theme == k }}><span>{{ label }}</span></label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <fieldset class="field">
+    <legend>Couleur des boutons et de la sélection</legend>
+    <div class="swatches">
+      {% for k, label in accents.items() %}
+      <label class="swatch sw-{{ k }}"><input type="radio" name="accent" value="{{ k }}" data-setting="accent" {{ 'checked' if accent == k }} aria-label="{{ label }}"></label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <fieldset class="field">
+    <legend>Taille des miniatures</legend>
+    <div class="segments">
+      {% for k, label in thumb_sizes.items() %}
+      <label><input type="radio" name="thumbs" value="{{ k }}" data-setting="thumbs" {{ 'checked' if thumbs == k }}><span>{{ label }}</span></label>
+      {% endfor %}
+    </div>
+  </fieldset>
+</section>
+
+<section class="stack tight">
+  <h2 class="group">Informations affichées en plein écran</h2>
+  {% for k, label, example, on in details %}
+  <label class="row-item toggle">
+    <span class="grow"><span>{{ label }}</span><span class="small muted">{{ example }}</span></span>
+    <input type="checkbox" data-detail="{{ k }}" {{ 'checked' if on }}>
+  </label>
+  {% endfor %}
+</section>
+
+<section class="stack tight">
+  <h2 class="group">Carte de l'appareil photo</h2>
+  <label class="row-item toggle top">
+    <span class="grow"><span>Effacer chaque photo de l'appareil dès que sa copie est contrôlée</span>
+      <span class="small muted">La carte de l'appareil reste libre. La copie du téléphone est alors la seule jusqu'au transfert sur l'ordinateur.</span></span>
+    <input type="checkbox" data-setting="auto_delete" {{ 'checked' if auto_delete }}>
+  </label>
+  {% if auto_delete %}
+    {% if only_on_phone %}<p class="small warn">{{ only_on_phone }} photo{{ "s" if only_on_phone > 1 }} ne {{ "sont" if only_on_phone > 1 else "est" }} que sur le téléphone : pense à les transférer sur l'ordinateur.</p>{% endif %}
+  {% else %}
+    <p class="small muted">Les nouvelles photos restent aussi sur la carte de l'appareil. Si tu réactives l'effacement, seules les photos copiées ensuite seront effacées.</p>
+  {% endif %}
+</section>
+
+<section class="stack tight">
+  <h2 class="group">Mémoire du téléphone</h2>
+  <div class="card stack-box">
+    {% for st in storages %}
+    <div class="stack tight">
+      <div class="line small"><span>{{ st.label }}</span><span class="end muted">{{ st.free | human_size }} libres sur {{ st.total | human_size }}</span></div>
+      <div class="bar" role="img" aria-label="{{ st.label }} utilisée à {{ st.percent }} %"><i class="grey" style="width: {{ st.percent }}%"></i></div>
+    </div>
+    {% endfor %}
+    <p class="small muted">{% if several %}Remplies dans cet ordre. {% endif %}Place pour environ {{ "{:,}".format(photos_left).replace(",", " ") }} photos RAW de plus. Quand tout est plein, la copie s'arrête et les photos restent sur l'appareil photo.</p>
+  </div>
+  <a class="row-item" href="/rejet">
+    <svg viewBox="0 0 24 24" class="red" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    <span class="grow">Supprimer les photos rejetées ({{ rejected }})</span>
+    <svg viewBox="0 0 24 24" class="muted" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+  </a>
+  <a class="row-item" href="/corbeille">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>
+    <span class="grow">Corbeille ({{ trashed }} photo{{ "s" if trashed > 1 }} récupérable{{ "s" if trashed > 1 }})</span>
+    <svg viewBox="0 0 24 24" class="muted" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+  </a>
+  <fieldset class="field">
+    <legend>Garder les photos dans la corbeille</legend>
+    <div class="segments">
+      {% for k, label in delays.items() %}
+      <label><input type="radio" name="trash_delay" value="{{ k }}" data-setting="trash_delay" {{ 'checked' if delay == k }}><span>{{ label }}</span></label>
+      {% endfor %}
+    </div>
+    <span class="small muted">Ou jusqu'à ce que le téléphone s'éteigne, si c'est plus tôt.</span>
+  </fieldset>
+</section>
+
+<section class="stack tight">
+  <h2 class="group">En cas de problème</h2>
+  <a class="row-item" href="/journal">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7M9 8h3"/></svg>
+    <span class="grow">Journal des événements</span>
+    <svg viewBox="0 0 24 24" class="muted" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+  </a>
+</section>
+</main>
+</div>
+{% endblock %}
