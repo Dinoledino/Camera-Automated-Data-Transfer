@@ -68,9 +68,9 @@
   </div>
   {% endif %}
   {% for p in photos %}
-  <a class="tile" data-id="{{ p.id }}" href="/photo/{{ p.id }}?{{ qs }}" aria-label="Photo {{ p.name }}{{ ', favorite' if p.favorite }}">
+  <a class="tile" data-id="{{ p.id }}" href="/photo/{{ p.id }}?{{ qs }}" aria-label="Photo {{ p | file_name }}{{ ', favorite' if p.favorite }}">
     <img src="/media/thumb/{{ p.id }}" alt="" loading="lazy">
-    <span class="caption"><span>{{ p.session_number and "%04d" % p.session_number or p.name[4:8] }}</span>
+    <span class="caption"><span class="ellipsis">{{ p | file_name | short_name }}</span>
       {% if p.favorite %}<svg viewBox="0 0 24 24" class="fav" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>{% endif %}
     </span>
     {% if p.flag == "keep" %}<span class="badge keep" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></span>

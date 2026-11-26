@@ -12,11 +12,11 @@
   <div class="grid two-cols">
     {% for p in photos %}
     <div class="stack tight">
-      <div class="tile" role="img" aria-label="Photo {{ p.name }}, rejetée">
+      <div class="tile" role="img" aria-label="Photo {{ p | file_name }}, rejetée">
         <img src="/media/thumb/{{ p.id }}" alt="" loading="lazy">
         <span class="badge reject" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
       </div>
-      <span class="small muted">{{ p.session_number and "Photo %04d" % p.session_number or p.name }}</span>
+      <span class="small muted ellipsis">{{ p | file_name | short_name(22) }}</span>
     </div>
     {% endfor %}
   </div>

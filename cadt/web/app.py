@@ -36,7 +36,7 @@ from . import queries as q
 HERE = Path(__file__).parent
 MONTHS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre",
           "octobre", "novembre", "décembre"]
-DEFAULT_DETAILS = {"reglages": True, "objectif": True, "heure": True, "fichier": False}
+DEFAULT_DETAILS = {"reglages": True, "objectif": True, "heure": True, "fichier": True}
 PLACEHOLDER_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3 2">'
                    '<rect width="3" height="2" fill="#26282D"/></svg>')
 
@@ -64,6 +64,16 @@ def french_datetime(iso: str | None) -> str:
     return f"{d.day} {MONTHS[d.month - 1]} {d.year} · {d:%H:%M:%S}"
 
 
+def file_name(photo) -> str:
+    """Nom actuel du fichier sur le téléphone (celui d'origine tant qu'il n'est pas copié)."""
+    return Path(photo.local_path).name if photo.local_path else photo.name
+
+
+def short_name(name: str, width: int = 16) -> str:
+    """Raccourcit par le début : « 2026-11-26_Rando-Vercors_0004.NEF » → « …Vercors_0004.NEF »."""
+    return name if len(name) <= width else "…" + name[-(width - 1):]
+
+
 def local_time(iso: str) -> str:
     """Horodatage UTC de la base → « à 14:52 » aujourd'hui, sinon « le 23 novembre à 14:52 »."""
     d = datetime.fromisoformat(iso).astimezone()
@@ -82,6 +92,8 @@ def duration(seconds: float) -> str:
 def create_app(config: WebConfig) -> Starlette:
     templates = Jinja2Templates(directory=str(HERE / "templates"))
     templates.env.filters["human_size"] = human_size
+    templates.env.filters["file_name"] = file_name
+    templates.env.filters["short_name"] = short_name
 
     def db() -> Database:
         return Database(config.db_path)

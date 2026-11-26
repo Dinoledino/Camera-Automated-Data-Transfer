@@ -273,3 +273,22 @@ def test_move_photos_between_sessions(env):
     with Database(tmp / "c.db") as db:
         p = db.get(ids[1])
         assert p.session_id is None and Path(p.local_path).name == p.name and Path(p.local_path).exists()
+
+
+def test_real_file_names_are_shown(env):
+    """La galerie et le plein écran montrent le nom réel du fichier, pas un numéro de session."""
+    client, ids, tmp, pool = env
+    sid = client.post("/api/sessions", json={"name": "Rando Vercors"}, headers=H).json()["id"]
+    with Database(tmp / "c.db") as db:
+        original = db.get(ids[0]).name                        # DSC_0001.NEF
+    client.post("/api/deplacer", json={"ids": [ids[0]], "session": sid}, headers=H)
+    r = client.get(f"/?s={sid}")
+    assert f'<span class="ellipsis">{original}</span>' in r.text  # déplacée sans renommage : même nom
+    assert original in text(client.get(f"/photo/{ids[0]}").text)
+    client.post("/api/deplacer", json={"ids": [ids[0]], "session": sid, "rename": True}, headers=H)
+    with Database(tmp / "c.db") as db:
+        from pathlib import Path
+        renamed = Path(db.get(ids[0]).local_path).name          # 2026-…_Rando-Vercors_0001.NEF
+    r = client.get(f"/?s={sid}")
+    assert f'<span class="ellipsis">…{renamed[-15:]}</span>' in r.text
+    assert renamed in text(client.get(f"/photo/{ids[0]}").text)
