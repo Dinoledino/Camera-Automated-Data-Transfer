@@ -4,7 +4,9 @@
 <div class="page">
 <header class="head">
   <div class="row">
-    <h1>Photos</h1>
+    <h1 id="gallery-title">Photos</h1>
+    {% if photos %}<button type="button" class="pill solid" id="start-select">Sélectionner</button>{% endif %}
+    <button type="button" class="pill solid" id="stop-select" hidden>Annuler</button>
   </div>
   <button type="button" class="card session" id="open-scope" aria-haspopup="dialog">
     <svg viewBox="0 0 24 24" class="accent" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
@@ -66,18 +68,46 @@
   </div>
   {% endif %}
   {% for p in photos %}
-  <a class="tile" href="/photo/{{ p.id }}?{{ qs }}" aria-label="Photo {{ p.name }}{{ ', favorite' if p.favorite }}">
+  <a class="tile" data-id="{{ p.id }}" href="/photo/{{ p.id }}?{{ qs }}" aria-label="Photo {{ p.name }}{{ ', favorite' if p.favorite }}">
     <img src="/media/thumb/{{ p.id }}" alt="" loading="lazy">
     <span class="caption"><span>{{ p.session_number and "%04d" % p.session_number or p.name[4:8] }}</span>
       {% if p.favorite %}<svg viewBox="0 0 24 24" class="fav" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>{% endif %}
     </span>
     {% if p.flag == "keep" %}<span class="badge keep" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></span>
     {% elif p.flag == "reject" %}<span class="badge reject" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span>{% endif %}
+    <span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></span>
   </a>
   {% else %}
     {% if not status.copying and not status.waiting %}<p class="empty">Aucune photo ici pour l'instant.</p>{% endif %}
   {% endfor %}
 </main>
+
+<div class="select-bar" id="select-bar" hidden>
+  <button type="button" class="btn primary" id="open-move" disabled>Déplacer…</button>
+</div>
+
+<div class="overlay" id="move-sheet" hidden>
+  <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="move-title">
+    <h2 id="move-title">Déplacer vers…</h2>
+    <div role="radiogroup" aria-label="Session de destination" class="checks">
+      {% for s, n in all_sessions %}
+      <label class="check"><input type="radio" name="dest" value="{{ s.id }}" data-folder="{{ s.folder }}" data-next="{{ '%04d' % s.next_number }}" {{ 'checked' if active and active.id == s.id }}>
+        <span class="grow"><span class="strong ellipsis">{{ s.name }}</span>
+        <span class="small muted">{% if active and active.id == s.id %}Session en cours · {% endif %}{{ s.day }} · {{ n }} photo{{ "s" if n > 1 }}</span></span></label>
+      {% endfor %}
+      <label class="check"><input type="radio" name="dest" value="" {{ 'checked' if not active }}>
+        <span class="grow"><span class="strong">Sans session (dossier par date)</span>
+        <span class="small muted">Rangées par date de prise de vue</span></span></label>
+    </div>
+    <label class="check top">
+      <input type="checkbox" id="move-rename">
+      <span class="grow"><span class="strong">Renommer d'après la session</span>
+      <span class="small muted" id="rename-hint">Décoché : les fichiers gardent leur nom actuel.</span></span>
+    </label>
+    <button type="button" class="btn primary" id="do-move">Déplacer</button>
+    <button type="button" class="btn ghost" id="cancel-move">Annuler</button>
+  </section>
+</div>
 
 <div class="overlay" id="scope-picker" hidden>
   <form class="dialog" method="get" action="/" role="dialog" aria-modal="true" aria-labelledby="scope-title">

@@ -241,3 +241,35 @@ def test_gallery_session_selection(env):
     # Plus de session en cours : toutes les photos par défaut.
     client.post("/api/sessions/active", json={"id": None}, headers=H)
     assert shown(client.get("/")) == set(ids)
+
+
+def test_move_photos_between_sessions(env):
+    client, ids, tmp, pool = env
+    from pathlib import Path
+    sid = client.post("/api/sessions", json={"name": "Rando Vercors"}, headers=H).json()["id"]
+    r = client.get("/?s=toutes")
+    assert "Sélectionner" in r.text and 'id="move-sheet"' in r.text and "Rando Vercors" in r.text
+    assert 'id="move-rename"' in r.text and 'id="move-rename" checked' not in r.text  # décoché par défaut
+    assert client.post("/api/deplacer", json={"ids": [ids[0]], "session": sid}).status_code == 403
+    assert client.post("/api/deplacer", json={"ids": [ids[0]], "session": 999}, headers=H).status_code == 404
+
+    # Sans renommer : le fichier garde son nom, change de dossier.
+    with Database(tmp / "c.db") as db:
+        before = Path(db.get(ids[0]).local_path).name
+    r = client.post("/api/deplacer", json={"ids": [ids[0], ids[1]], "session": sid}, headers=H)
+    assert r.json() == {"moved": 2, "refused": 0}
+    with Database(tmp / "c.db") as db:
+        p = db.get(ids[0])
+        assert p.session_id == sid and Path(p.local_path).name == before
+        assert Path(p.local_path).parent.name.endswith("_Rando-Vercors") and Path(p.local_path).exists()
+    assert {i for i in ids if f'href="/photo/{i}?' in client.get(f"/?s={sid}").text} == {ids[0], ids[1]}
+
+    # Renommer d'après la session, puis retour au dossier par date avec le nom d'origine.
+    client.post("/api/deplacer", json={"ids": [ids[1]], "session": sid, "rename": True}, headers=H)
+    with Database(tmp / "c.db") as db:
+        assert Path(db.get(ids[1]).local_path).name.startswith(db.get_session(sid).folder + "_")
+    r = client.post("/api/deplacer", json={"ids": [ids[1]], "session": None, "rename": True}, headers=H)
+    assert r.json()["moved"] == 1
+    with Database(tmp / "c.db") as db:
+        p = db.get(ids[1])
+        assert p.session_id is None and Path(p.local_path).name == p.name and Path(p.local_path).exists()

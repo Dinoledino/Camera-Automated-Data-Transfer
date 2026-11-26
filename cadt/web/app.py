@@ -29,6 +29,7 @@ from starlette.templating import Jinja2Templates
 from ..db import Database
 from ..exif import format_exposure
 from ..storage import StoragePool
+from ..sessions import move_photos
 from ..trash import Trash
 from . import queries as q
 
@@ -304,6 +305,20 @@ def create_app(config: WebConfig) -> Starlette:
             active = d.active_session()
             return JSONResponse({"id": active.id if active else None})
 
+    async def move(request: Request):
+        body = await request.json()
+        try:
+            ids = [int(i) for i in body.get("ids", [])]
+            dest = body.get("session")
+            dest = int(dest) if dest not in (None, "") else None
+        except (TypeError, ValueError):
+            return JSONResponse({"erreur": "requête invalide"}, status_code=400)
+        with db() as d:
+            if dest is not None and d.get_session(dest) is None:
+                return JSONResponse({"erreur": "session introuvable"}, status_code=404)
+            r = move_photos(d, config.pool, ids, dest, rename=bool(body.get("rename")))
+            return JSONResponse({"moved": len(r.moved) + len(r.reassigned), "refused": len(r.refused)})
+
     async def trash_put(request: Request):
         body = await request.json()
         ids = [int(i) for i in body.get("ids", [])]
@@ -345,6 +360,7 @@ def create_app(config: WebConfig) -> Starlette:
         Route("/api/photo/{photo_id:int}/flag", guarded(set_flag), methods=["POST"]),
         Route("/api/sessions", guarded(create_session), methods=["POST"]),
         Route("/api/sessions/active", guarded(set_active), methods=["POST"]),
+        Route("/api/deplacer", guarded(move), methods=["POST"]),
         Route("/api/corbeille/mettre", guarded(trash_put), methods=["POST"]),
         Route("/api/corbeille/recuperer", guarded(trash_restore), methods=["POST"]),
         Route("/api/corbeille/vider", guarded(trash_empty), methods=["POST"]),

@@ -132,3 +132,17 @@ button.session { width: 100%; text-align: left; color: var(--text); font-family:
 .checks legend { padding: 0 0 6px; }
 .check { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 6px 12px; border-radius: 12px; background: var(--surface2); cursor: pointer; }
 .check input { width: 22px; height: 22px; accent-color: var(--accent); flex-shrink: 0; }
+
+/* Sélection et déplacement */
+.pill.solid { border: none; background: var(--surface2); font-size: 15px; }
+.pill[hidden], .btn[hidden] { display: none; }
+.tick { display: none; position: absolute; top: 5px; left: 5px; width: 24px; height: 24px; border-radius: 12px; background: var(--accent); align-items: center; justify-content: center; }
+.tick svg { width: 14px; height: 14px; color: var(--accent-ink); stroke-width: 3; }
+body.selecting .tile:not(.pending) { opacity: .7; }
+body.selecting .tile.picked { opacity: 1; outline: 3px solid var(--accent); outline-offset: -3px; }
+body.selecting .tile.picked .tick { display: flex; }
+body.selecting .tabs { display: none; }
+.select-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0)); background: #16171A; border-top: 1px solid var(--line); }
+.select-bar[hidden] { display: none; }
+.check.top { align-items: flex-start; }
+.check input[type=radio] { width: 20px; height: 20px; }

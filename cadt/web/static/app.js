@@ -80,6 +80,9 @@ if (status) {
   setInterval(() => {
     fetch("/api/status").then((r) => r.json()).then((s) => {
       const now = `${s.saved}:${s.unsaved}:${s.camera}:${s.full}`;
+      // Jamais pendant une sélection ou une fenêtre ouverte : on perdrait ce que l'utilisateur fait.
+      const busy = document.body.classList.contains("selecting") || document.querySelector(".overlay:not([hidden])");
+      if (busy) return;
       if (last !== null && now !== last && window.scrollY < 80) location.reload();
       last = now;
     }).catch(() => {});
@@ -167,5 +170,94 @@ if (scopePicker) {
       ev.preventDefault();
       location.href = `/?f=${scopePicker.querySelector("input[name=f]").value}&s=toutes`;
     }
+  });
+}
+
+// ---------------------------------------------------------------- galerie : sélection et déplacement
+
+const startSelect = document.getElementById("start-select");
+if (startSelect) {
+  const title = document.getElementById("gallery-title");
+  const stopSelect = document.getElementById("stop-select");
+  const bar = document.getElementById("select-bar");
+  const openMove = document.getElementById("open-move");
+  const sheet = document.getElementById("move-sheet");
+  const rename = document.getElementById("move-rename");
+  const hint = document.getElementById("rename-hint");
+  const picked = new Set();
+  let selecting = false;
+
+  const refresh = () => {
+    const n = picked.size;
+    title.textContent = selecting ? (n ? `${n} sélectionnée${n > 1 ? "s" : ""}` : "Touche des photos") : "Photos";
+    openMove.disabled = n === 0;
+    openMove.textContent = n ? `Déplacer ${n} photo${n > 1 ? "s" : ""}…` : "Déplacer…";
+    document.getElementById("move-title").textContent = `Déplacer ${n} photo${n > 1 ? "s" : ""} vers…`;
+  };
+  const setSelecting = (on) => {
+    selecting = on;
+    document.body.classList.toggle("selecting", on);
+    startSelect.hidden = on; stopSelect.hidden = !on; bar.hidden = !on;
+    if (!on) { picked.clear(); document.querySelectorAll(".tile.picked").forEach((t) => t.classList.remove("picked")); }
+    refresh();
+  };
+  const toggle = (tile) => {
+    const id = Number(tile.dataset.id);
+    if (picked.has(id)) picked.delete(id); else picked.add(id);
+    tile.classList.toggle("picked", picked.has(id));
+    tile.setAttribute("aria-pressed", picked.has(id) ? "true" : "false");
+    refresh();
+  };
+
+  startSelect.addEventListener("click", () => setSelecting(true));
+  stopSelect.addEventListener("click", () => setSelecting(false));
+
+  // Appui long sur une photo : passe en sélection avec cette photo cochée.
+  let pressTimer = null, longPressed = false;
+  document.querySelectorAll(".tile[data-id]").forEach((tile) => {
+    tile.addEventListener("touchstart", () => {
+      longPressed = false;
+      pressTimer = setTimeout(() => {
+        longPressed = true;
+        if (!selecting) setSelecting(true);
+        toggle(tile);
+        if (navigator.vibrate) navigator.vibrate(20);
+      }, 500);
+    }, { passive: true });
+    ["touchend", "touchmove", "touchcancel"].forEach((e) => tile.addEventListener(e, () => clearTimeout(pressTimer), { passive: true }));
+    tile.addEventListener("contextmenu", (ev) => ev.preventDefault());
+    tile.addEventListener("click", (ev) => {
+      if (longPressed) { ev.preventDefault(); longPressed = false; return; }
+      if (!selecting) return;
+      ev.preventDefault();
+      toggle(tile);
+    });
+  });
+
+  const updateHint = () => {
+    const dest = sheet.querySelector("input[name=dest]:checked");
+    if (!rename.checked) hint.textContent = "Décoché : les fichiers gardent leur nom actuel.";
+    else if (dest && dest.value) hint.textContent = `Exemple : ${dest.dataset.folder}_${dest.dataset.next}.NEF`;
+    else hint.textContent = "Les photos reprennent leur nom d'origine (DSC_xxxx).";
+  };
+  sheet.addEventListener("change", updateHint);
+  openMove.addEventListener("click", () => { updateHint(); sheet.hidden = false; });
+  document.getElementById("cancel-move").addEventListener("click", () => { sheet.hidden = true; });
+  sheet.addEventListener("click", (ev) => { if (ev.target === sheet) sheet.hidden = true; });
+
+  const doMove = document.getElementById("do-move");
+  doMove.addEventListener("click", () => {
+    const dest = sheet.querySelector("input[name=dest]:checked");
+    if (!dest) { toast("Choisis une session."); return; }
+    doMove.disabled = true;
+    post("/api/deplacer", { ids: [...picked], session: dest.value || null, rename: rename.checked })
+      .then((r) => {
+        sheet.hidden = true;
+        let msg = `${r.moved} photo${r.moved > 1 ? "s" : ""} déplacée${r.moved > 1 ? "s" : ""}`;
+        if (r.refused) msg += ` · ${r.refused} pas encore possible${r.refused > 1 ? "s" : ""} (copie en cours)`;
+        toast(msg);
+        setTimeout(() => location.reload(), 1200);
+      })
+      .catch(() => { toast("Impossible de déplacer : réessaie."); doMove.disabled = false; });
   });
 }
