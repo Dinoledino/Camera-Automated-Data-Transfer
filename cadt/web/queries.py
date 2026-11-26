@@ -25,19 +25,31 @@ ORDER = "capture_time DESC, id DESC"
 WATCHER_STALE_SECONDS = 30
 
 
+NO_SESSION = 0  # dans une sélection de sessions : les photos hors session (rangées par date)
+
+
+def sessions_cond(sessions: tuple[int, ...] | None) -> tuple[str, list]:
+    """Condition SQL « AND … » pour une sélection de sessions (None ou vide : toutes les photos)."""
+    if not sessions:
+        return "", []
+    ids = [i for i in sessions if i != NO_SESSION]
+    parts = []
+    if ids:
+        parts.append(f"session_id IN ({','.join('?' * len(ids))})")
+    if NO_SESSION in sessions:
+        parts.append("session_id IS NULL")
+    return f" AND ({' OR '.join(parts)})", ids
+
+
 @dataclass(frozen=True)
 class Scope:
-    """Ce que la galerie montre : un filtre, et une session (None : toutes)."""
+    """Ce que la galerie montre : un filtre, et une sélection de sessions (None : toutes les photos)."""
     filter: str = "toutes"
-    session_id: int | None = None
+    sessions: tuple[int, ...] | None = None
 
     def where(self) -> tuple[str, list]:
-        sql = f"{VISIBLE} AND ({FILTERS.get(self.filter, FILTERS['toutes'])[1]})"
-        params: list = []
-        if self.session_id is not None:
-            sql += " AND session_id = ?"
-            params.append(self.session_id)
-        return sql, params
+        cond, params = sessions_cond(self.sessions)
+        return f"{VISIBLE} AND ({FILTERS.get(self.filter, FILTERS['toutes'])[1]}){cond}", params
 
 
 def photos(db: Database, scope: Scope, limit: int = 300, offset: int = 0) -> list[Photo]:
@@ -47,10 +59,10 @@ def photos(db: Database, scope: Scope, limit: int = 300, offset: int = 0) -> lis
     return [Photo(**dict(r)) for r in rows]
 
 
-def filter_counts(db: Database, session_id: int | None) -> dict[str, int]:
+def filter_counts(db: Database, sessions: tuple[int, ...] | None) -> dict[str, int]:
     out = {}
     for key in FILTERS:
-        where, params = Scope(key, session_id).where()
+        where, params = Scope(key, sessions).where()
         out[key] = db.conn.execute(f"SELECT count(*) FROM photos WHERE {where}", params).fetchone()[0]
     return out
 
@@ -86,9 +98,9 @@ class CopyStatus:
         return round(100 * self.saved / self.total) if self.total else 100
 
 
-def copy_status(db: Database, session_id: int | None = None,
+def copy_status(db: Database, sessions: tuple[int, ...] | None = None,
                 now: datetime | None = None) -> CopyStatus:
-    cond, params = ("AND session_id = ?", [session_id]) if session_id is not None else ("", [])
+    cond, params = sessions_cond(sessions)
     q = lambda where: db.conn.execute(f"SELECT count(*) FROM photos WHERE {where} {cond}", params).fetchone()[0]  # noqa: E731
     raw = db.get_setting("watcher_status")
     camera, full = "inconnu", False

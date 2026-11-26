@@ -86,16 +86,20 @@ def create_app(config: WebConfig) -> Starlette:
         return Database(config.db_path)
 
     def scope_from(request: Request, d: Database) -> q.Scope:
+        """s=toutes : toutes les photos ; s=1,3 (ou s=1&s=3) : ces sessions (0 : hors session) ;
+        sans s : la session active (toutes les photos s'il n'y en a pas)."""
         f = request.query_params.get("f", "toutes")
-        s = request.query_params.get("s")
-        if s == "toutes":
-            session_id = None
-        elif s and s.isdigit():
-            session_id = int(s)
+        raw = ",".join(request.query_params.getlist("s"))
+        known = {s.id for s in d.list_sessions()} | {q.NO_SESSION}
+        wanted = tuple(sorted({int(x) for x in raw.split(",") if x.strip().isdigit()} & known))
+        if raw == "toutes" or (raw and not wanted):
+            sessions = None
+        elif wanted:
+            sessions = wanted
         else:
             active = d.active_session()
-            session_id = active.id if active else None
-        return q.Scope(f if f in q.FILTERS else "toutes", session_id)
+            sessions = (active.id,) if active else None
+        return q.Scope(f if f in q.FILTERS else "toutes", sessions)
 
     def storage_summary() -> dict:
         usage = config.pool.usage()
@@ -105,9 +109,24 @@ def create_app(config: WebConfig) -> Starlette:
         return {"percent": round(100 * used / total) if total else 0, "free": free,
                 "photos_left": free // (50 * 1024 * 1024)}
 
+    def sessions_param(scope: q.Scope) -> str:
+        return "toutes" if scope.sessions is None else ",".join(map(str, scope.sessions))
+
     def query_string(scope: q.Scope) -> str:
-        s = "toutes" if scope.session_id is None else str(scope.session_id)
-        return f"f={scope.filter}&s={s}"
+        return f"f={scope.filter}&s={sessions_param(scope)}"
+
+    def scope_label(d: Database, scope: q.Scope, active) -> tuple[str, str]:
+        """(petite ligne, titre) de la carte « session » en haut de la galerie."""
+        if scope.sessions is None:
+            return ("Session en cours : " + active.name if active else "Aucune session en cours",
+                    "Toutes les photos")
+        if len(scope.sessions) == 1:
+            sid = scope.sessions[0]
+            if sid == q.NO_SESSION:
+                return "Sélection", "Photos hors session"
+            s = d.get_session(sid)
+            return ("Session en cours" if active and active.id == sid else "Session", s.name)
+        return "Sélection", f"{len(scope.sessions)} sessions"
 
     # ------------------------------------------------------------------ pages
 
@@ -115,15 +134,18 @@ def create_app(config: WebConfig) -> Starlette:
         with db() as d:
             scope = scope_from(request, d)
             active = d.active_session()
-            session = d.get_session(scope.session_id) if scope.session_id else None
+            small, title = scope_label(d, scope, active)
+            counts = q.session_counts(d)
             ctx = {
                 "request": request,
-                "scope": scope, "qs": query_string(scope),
-                "active": active, "session": session,
-                "status": q.copy_status(d, scope.session_id),
+                "scope": scope, "qs": query_string(scope), "s_param": sessions_param(scope),
+                "active": active, "scope_small": small, "scope_title": title,
+                "all_sessions": [(s, counts.get(s.id, 0)) for s in d.list_sessions()],
+                "no_session_count": q.filter_counts(d, (q.NO_SESSION,))["toutes"],
+                "status": q.copy_status(d, scope.sessions),
                 "storage": storage_summary(),
                 "filters": [(k, label, n) for (k, (label, _)), n in
-                            zip(q.FILTERS.items(), q.filter_counts(d, scope.session_id).values())],
+                            zip(q.FILTERS.items(), q.filter_counts(d, scope.sessions).values())],
                 "photos": q.photos(d, scope),
                 "rejected": q.rejected_count(d),
             }

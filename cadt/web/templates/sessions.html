@@ -6,7 +6,7 @@
 <main class="stack">
 
 <section class="card active-session {{ 'none' if not active }}">
-  <span class="kicker">Session active</span>
+  <span class="kicker">Session en cours</span>
   {% if active %}
     <strong class="title">{{ active.name }}</strong>
     <span class="small sub">Dossier : {{ active.folder }}</span>
@@ -37,7 +37,7 @@
       <span class="small muted">{{ s.day }} · {{ n }} photo{{ "s" if n > 1 }}</span>
     </a>
     {% if active and active.id == s.id %}
-      <span class="small accent strong">Active</span>
+      <span class="small accent strong">En cours</span>
     {% else %}
       <button type="button" class="pill" data-session-active="{{ s.id }}">Activer</button>
     {% endif %}

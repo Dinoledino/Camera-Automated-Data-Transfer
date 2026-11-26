@@ -171,7 +171,7 @@ def test_sessions_create_activate_stop(env):
     sid = client.post("/api/sessions", json={"name": "Rando Vercors"}, headers=H).json()["id"]
     t = text(client.get("/sessions").text)
     assert "Rando Vercors" in t and "Prochaine photo : n° 0001" in t
-    assert "Session active" in text(client.get("/").text)
+    assert "Session en cours" in text(client.get("/").text)
     other = client.post("/api/sessions", json={"name": "Studio"}, headers=H).json()["id"]
     assert client.post("/api/sessions/active", json={"id": sid}, headers=H).json() == {"id": sid}
     assert client.post("/api/sessions/active", json={"id": 999}, headers=H).status_code == 404
@@ -213,3 +213,31 @@ def test_empty_trash(env):
     from pathlib import Path
     assert not Path(path).exists()
     assert "La corbeille est vide" in text(client.get("/corbeille").text)
+
+
+def test_gallery_session_selection(env):
+    """Par défaut : la session en cours ; sinon toutes les photos ou une sélection de sessions."""
+    client, ids, tmp, pool = env
+    from cadt.sessions import move_photos
+    a = client.post("/api/sessions", json={"name": "Rando"}, headers=H).json()["id"]
+    b = client.post("/api/sessions", json={"name": "Studio"}, headers=H).json()["id"]  # en cours
+    with Database(tmp / "c.db") as db:
+        move_photos(db, pool, [ids[0]], a)
+        move_photos(db, pool, [ids[1]], b)
+    shown = lambda r: {i for i in ids if f'href="/photo/{i}?' in r.text}  # noqa: E731
+
+    r = client.get("/")
+    assert shown(r) == {ids[1]} and "Studio" in text(r.text)
+    assert shown(client.get("/?s=toutes")) == set(ids)
+    r = client.get(f"/?s={a}&s={b}")
+    assert shown(r) == {ids[0], ids[1]} and "2 sessions" in text(r.text)
+    assert f"s={a},{b}" in r.text                      # les filtres gardent la sélection
+    assert shown(client.get(f"/?s={a},0")) == {ids[0], ids[2]}
+    assert shown(client.get("/?s=0")) == {ids[2]}
+    assert shown(client.get("/?s=999")) == set(ids)    # session inconnue : tout, pas d'erreur
+    # Plein écran : les voisins restent dans la sélection.
+    r = client.get(f"/photo/{ids[0]}?f=toutes&s={a},0")
+    assert "2 sur 2" in text(r.text)   # la plus ancienne des deux
+    # Plus de session en cours : toutes les photos par défaut.
+    client.post("/api/sessions/active", json={"id": None}, headers=H)
+    assert shown(client.get("/")) == set(ids)

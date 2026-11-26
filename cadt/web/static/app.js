@@ -153,3 +153,19 @@ if (confirmEmpty) {
       .catch(() => { toast("Impossible de vider la corbeille : réessaie."); doEmpty.disabled = false; });
   });
 }
+
+// ---------------------------------------------------------------- galerie : choix des sessions affichées
+
+const scopePicker = document.getElementById("scope-picker");
+if (scopePicker) {
+  document.getElementById("open-scope").addEventListener("click", () => { scopePicker.hidden = false; });
+  document.getElementById("close-scope").addEventListener("click", () => { scopePicker.hidden = true; });
+  scopePicker.addEventListener("click", (ev) => { if (ev.target === scopePicker) scopePicker.hidden = true; });
+  // Rien de coché : « Afficher la sélection » montre toutes les photos.
+  scopePicker.querySelector("form").addEventListener("submit", (ev) => {
+    if (!scopePicker.querySelector("input[name=s]:checked")) {
+      ev.preventDefault();
+      location.href = `/?f=${scopePicker.querySelector("input[name=f]").value}&s=toutes`;
+    }
+  });
+}
