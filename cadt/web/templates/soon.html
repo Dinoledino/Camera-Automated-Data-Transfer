@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="page">
+<header class="head"><h1>{{ title }}</h1></header>
+<main class="stack">
+  <div class="notice">
+    <svg viewBox="0 0 24 24" class="blue" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    <span class="small">{% if missing %}Cette page n'existe pas.{% else %}Cet écran arrive bientôt. La sauvegarde des photos continue normalement.{% endif %}</span>
+  </div>
+  <a class="btn ghost" href="/">Retour aux photos</a>
+</main>
+</div>
+{% endblock %}

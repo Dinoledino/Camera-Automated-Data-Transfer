@@ -29,6 +29,7 @@ from starlette.templating import Jinja2Templates
 from ..db import Database
 from ..exif import format_exposure
 from ..storage import StoragePool
+from ..trash import Trash
 from . import queries as q
 
 HERE = Path(__file__).parent
@@ -60,6 +61,21 @@ def french_datetime(iso: str | None) -> str:
         return ""
     d = datetime.fromisoformat(iso[:19])
     return f"{d.day} {MONTHS[d.month - 1]} {d.year} · {d:%H:%M:%S}"
+
+
+def local_time(iso: str) -> str:
+    """Horodatage UTC de la base → « à 14:52 » aujourd'hui, sinon « le 23 novembre à 14:52 »."""
+    d = datetime.fromisoformat(iso).astimezone()
+    if d.date() == datetime.now().astimezone().date():
+        return f"à {d:%H:%M}"
+    return f"le {d.day} {MONTHS[d.month - 1]} à {d:%H:%M}"
+
+
+def duration(seconds: float) -> str:
+    """« 23 h 41 », « 12 min »."""
+    minutes = int(seconds // 60)
+    h, m = divmod(minutes, 60)
+    return f"{h} h {m:02d}" if h else f"{m} min"
 
 
 def create_app(config: WebConfig) -> Starlette:
@@ -139,6 +155,55 @@ def create_app(config: WebConfig) -> Starlette:
             }
         return templates.TemplateResponse(request, "photo.html", ctx)
 
+    async def sessions_page(request: Request):
+        with db() as d:
+            active = d.active_session()
+            counts = q.session_counts(d)
+            ctx = {
+                "request": request, "tab": "sessions", "active": active,
+                "active_count": counts.get(active.id, 0) if active else 0,
+                "today": datetime.now().date().isoformat(),
+                "sessions": [(s, counts.get(s.id, 0)) for s in d.list_sessions()],
+                "unsorted": q.filter_counts(d, None)["toutes"] - sum(counts.values()),
+            }
+        return templates.TemplateResponse(request, "sessions.html", ctx)
+
+    async def reject_page(request: Request):
+        with db() as d:
+            photos = q.rejected_photos(d)
+            ctx = {
+                "request": request, "photos": photos,
+                "ids": ",".join(str(p.id) for p in photos),
+                "size": sum(p.size for p in photos),
+                "delay": duration(Trash(d, config.pool).delay.total_seconds()),
+            }
+        return templates.TemplateResponse(request, "reject.html", ctx)
+
+    async def trash_page(request: Request):
+        with db() as d:
+            trash = Trash(d, config.pool)
+            trash.expire()  # ce qui a dépassé le délai n'est plus récupérable : ne pas le montrer
+            items = d.trashed_photos()
+            ctx = {
+                "request": request,
+                "items": [{"photo": p, "name": Path(p.local_path).name, "when": local_time(p.trashed_at)}
+                          for p in items],
+                "left": duration(min(trash.seconds_left(p) for p in items)) if items else None,
+                "restored": request.query_params.get("r"),
+            }
+        return templates.TemplateResponse(request, "trash.html", ctx)
+
+    async def soon_page(request: Request):
+        tab = request.url.path.strip("/")
+        titles = {"reglages": "Réglages", "journal": "Journal"}
+        return templates.TemplateResponse(request, "soon.html", {
+            "request": request, "tab": tab, "title": titles.get(tab, "Bientôt")})
+
+    async def not_found(request: Request, exc):
+        return templates.TemplateResponse(request, "soon.html", {
+            "request": request, "tab": None, "title": "Page introuvable", "missing": True},
+            status_code=404)
+
     # ------------------------------------------------------------------ images
 
     async def thumb(request: Request):
@@ -196,19 +261,71 @@ def create_app(config: WebConfig) -> Starlette:
             d.set_flag(photo_id, flag)
             return JSONResponse({"flag": d.get(photo_id).flag})
 
+    async def create_session(request: Request):
+        body = await request.json()
+        name = str(body.get("name", "")).strip()
+        if not name:
+            return JSONResponse({"erreur": "Donne un nom à la session."}, status_code=400)
+        with db() as d:
+            session = d.create_session(name)
+            d.set_active_session(session.id)
+            return JSONResponse({"id": session.id, "folder": session.folder})
+
+    async def set_active(request: Request):
+        body = await request.json()
+        session_id = body.get("id")
+        with db() as d:
+            try:
+                d.set_active_session(int(session_id) if session_id is not None else None)
+            except (ValueError, TypeError):
+                return JSONResponse({"erreur": "session introuvable"}, status_code=404)
+            active = d.active_session()
+            return JSONResponse({"id": active.id if active else None})
+
+    async def trash_put(request: Request):
+        body = await request.json()
+        ids = [int(i) for i in body.get("ids", [])]
+        with db() as d:
+            # Seulement les photos encore rejetées : celles qu'on a « dé-rejetées » entre-temps restent.
+            wanted = {p.id for p in q.rejected_photos(d)}
+            done = Trash(d, config.pool).put([i for i in ids if i in wanted])
+            return JSONResponse({"count": len(done)})
+
+    async def trash_restore(request: Request):
+        body = await request.json()
+        with db() as d:
+            done = Trash(d, config.pool).restore([int(body.get("id", 0))])
+            return JSONResponse({"count": len(done)})
+
+    async def trash_empty(request: Request):
+        with db() as d:
+            trash = Trash(d, config.pool)
+            freed = trash.purge([p.id for p in d.trashed_photos()])
+            return JSONResponse({"freed": freed})
+
     async def status_api(request: Request):
         with db() as d:
             st = q.copy_status(d)
         return JSONResponse({"unsaved": st.unsaved, "saved": st.saved, "total": st.total,
                              "camera": st.camera, "full": st.full})
 
-    return Starlette(routes=[
+    return Starlette(exception_handlers={404: not_found}, routes=[
         Route("/", gallery),
+        Route("/sessions", sessions_page),
+        Route("/rejet", reject_page),
+        Route("/corbeille", trash_page),
+        Route("/reglages", soon_page),
+        Route("/journal", soon_page),
         Route("/photo/{photo_id:int}", photo_page),
         Route("/media/thumb/{photo_id:int}", thumb),
         Route("/media/preview/{photo_id:int}", preview),
         Route("/api/photo/{photo_id:int}/favorite", guarded(set_favorite), methods=["POST"]),
         Route("/api/photo/{photo_id:int}/flag", guarded(set_flag), methods=["POST"]),
+        Route("/api/sessions", guarded(create_session), methods=["POST"]),
+        Route("/api/sessions/active", guarded(set_active), methods=["POST"]),
+        Route("/api/corbeille/mettre", guarded(trash_put), methods=["POST"]),
+        Route("/api/corbeille/recuperer", guarded(trash_restore), methods=["POST"]),
+        Route("/api/corbeille/vider", guarded(trash_empty), methods=["POST"]),
         Route("/api/status", status_api),
         Mount("/static", StaticFiles(directory=str(HERE / "static")), name="static"),
     ])

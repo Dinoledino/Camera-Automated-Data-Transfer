@@ -85,3 +85,71 @@ if (status) {
     }).catch(() => {});
   }, 4000);
 }
+
+// ---------------------------------------------------------------- sessions
+
+function slug(name) {
+  return name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+const newSession = document.getElementById("new-session");
+if (newSession) {
+  const input = newSession.querySelector("input");
+  const hint = document.getElementById("folder-hint");
+  input.addEventListener("input", () => {
+    hint.textContent = `Les photos prises ensuite iront dans ${input.dataset.today}_${slug(input.value) || "Nom-de-la-session"}/`;
+  });
+  newSession.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const btn = newSession.querySelector("button");
+    btn.disabled = true;
+    post("/api/sessions", { name: input.value })
+      .then(() => location.reload())
+      .catch(() => { toast("Impossible de créer la session : réessaie."); btn.disabled = false; });
+  });
+}
+
+document.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-session-active]");
+  if (!btn) return;
+  btn.disabled = true;
+  const id = btn.dataset.sessionActive;
+  post("/api/sessions/active", { id: id === "" ? null : Number(id) })
+    .then(() => location.reload())
+    .catch(() => { toast("Impossible de changer de session : réessaie."); btn.disabled = false; });
+});
+
+// ---------------------------------------------------------------- rejet et corbeille
+
+const putTrash = document.getElementById("put-trash");
+if (putTrash) {
+  putTrash.addEventListener("click", () => {
+    putTrash.disabled = true;
+    const ids = putTrash.dataset.ids.split(",").map(Number);
+    post("/api/corbeille/mettre", { ids })
+      .then(() => location.replace("/corbeille"))
+      .catch(() => { toast("Impossible de mettre à la corbeille : réessaie."); putTrash.disabled = false; });
+  });
+}
+
+document.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-restore]");
+  if (!btn) return;
+  btn.disabled = true;
+  post("/api/corbeille/recuperer", { id: Number(btn.dataset.restore) })
+    .then(() => location.replace("/corbeille?r=1"))
+    .catch(() => { toast("Impossible de récupérer la photo : réessaie."); btn.disabled = false; });
+});
+
+const confirmEmpty = document.getElementById("confirm-empty");
+if (confirmEmpty) {
+  document.getElementById("ask-empty").addEventListener("click", () => { confirmEmpty.hidden = false; });
+  document.getElementById("cancel-empty").addEventListener("click", () => { confirmEmpty.hidden = true; });
+  const doEmpty = document.getElementById("do-empty");
+  doEmpty.addEventListener("click", () => {
+    doEmpty.disabled = true;
+    post("/api/corbeille/vider", {})
+      .then(() => location.replace("/corbeille"))
+      .catch(() => { toast("Impossible de vider la corbeille : réessaie."); doEmpty.disabled = false; });
+  });
+}

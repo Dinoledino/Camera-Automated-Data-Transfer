@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Sessions{% endblock %}
+{% block content %}
+<div class="page">
+<header class="head"><h1>Sessions</h1></header>
+<main class="stack">
+
+<section class="card active-session {{ 'none' if not active }}">
+  <span class="kicker">Session active</span>
+  {% if active %}
+    <strong class="title">{{ active.name }}</strong>
+    <span class="small sub">Dossier : {{ active.folder }}</span>
+    <span class="small sub">Prochaine photo : n° {{ "%04d" % active.next_number }} · {{ active_count }} photo{{ "s" if active_count > 1 }} pour l'instant</span>
+    <div class="actions">
+      <a class="pill" href="/?f=toutes&s={{ active.id }}">Voir les photos</a>
+      <button type="button" class="pill" data-session-active="">Arrêter la session</button>
+    </div>
+  {% else %}
+    <strong class="title">Aucune</strong>
+    <span class="small sub">Les nouvelles photos sont rangées par date de prise de vue.</span>
+  {% endif %}
+</section>
+
+<form class="new-session" id="new-session">
+  <label for="nom" class="strong">Nouvelle session</label>
+  <input id="nom" name="name" type="text" placeholder="Ex. Rando Vercors" autocomplete="off" maxlength="80" required data-today="{{ today }}">
+  <span class="small muted" id="folder-hint">Les photos prises ensuite iront dans {{ today }}_Nom-de-la-session/</span>
+  <button type="submit" class="btn primary">Créer et activer</button>
+</form>
+
+<section class="stack tight">
+  <h2 class="section-title">Toutes les sessions</h2>
+  {% for s, n in sessions %}
+  <div class="row-item">
+    <a class="grow" href="/?f=toutes&s={{ s.id }}">
+      <span class="strong ellipsis">{{ s.name }}</span>
+      <span class="small muted">{{ s.day }} · {{ n }} photo{{ "s" if n > 1 }}</span>
+    </a>
+    {% if active and active.id == s.id %}
+      <span class="small accent strong">Active</span>
+    {% else %}
+      <button type="button" class="pill" data-session-active="{{ s.id }}">Activer</button>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="small muted">Aucune session pour l'instant.</p>
+  {% endfor %}
+  <a class="row-item" href="/?f=toutes&s=toutes">
+    <span class="grow"><span class="strong">Toutes les photos</span>
+    <span class="small muted">{{ unsorted }} hors session, rangée{{ "s" if unsorted > 1 }} par date</span></span>
+  </a>
+</section>
+</main>
+</div>
+{% endblock %}

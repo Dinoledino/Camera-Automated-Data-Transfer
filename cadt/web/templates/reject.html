@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Supprimer les rejetées{% endblock %}
+{% block content %}
+<div class="page">
+<header class="viewer-head">
+  <a class="icon-btn" href="/" aria-label="Retour"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></a>
+  <h1 class="h2">Supprimer les rejetées</h1>
+</header>
+<main class="stack">
+{% if photos %}
+  <p class="lead">{{ "Cette" if photos|length == 1 else "Ces" }} <strong>{{ photos|length }} photo{{ "s" if photos|length > 1 }}</strong> rejetée{{ "s" if photos|length > 1 }} {{ "va" if photos|length == 1 else "vont" }} être retirée{{ "s" if photos|length > 1 }} du téléphone. <span class="muted">{{ size | human_size }} libérés.</span></p>
+  <div class="grid two-cols">
+    {% for p in photos %}
+    <div class="stack tight">
+      <div class="tile" role="img" aria-label="Photo {{ p.name }}, rejetée">
+        <img src="/media/thumb/{{ p.id }}" alt="" loading="lazy">
+        <span class="badge reject" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+      </div>
+      <span class="small muted">{{ p.session_number and "Photo %04d" % p.session_number or p.name }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="notice warn-box">
+    <svg viewBox="0 0 24 24" class="warn" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg>
+    <span class="small">Ces photos ne sont <strong>plus sur l'appareil photo</strong>. Elles iront dans la corbeille, où tu pourras les récupérer <strong>jusqu'à l'extinction du téléphone ou pendant {{ delay }}</strong>. Ensuite, elles seront perdues définitivement.</span>
+  </div>
+{% else %}
+  <p class="lead muted">Aucune photo rejetée.</p>
+{% endif %}
+</main>
+<footer class="footer">
+  {% if photos %}
+  <button type="button" class="btn danger" id="put-trash" data-ids="{{ ids }}">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>
+    Mettre {{ "la photo" if photos|length == 1 else "les %d photos" % photos|length }} à la corbeille</button>
+  {% endif %}
+  <a class="btn ghost" href="/">Annuler</a>
+</footer>
+</div>
+{% endblock %}
+{% block nav %}{% endblock %}

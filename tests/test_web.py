@@ -141,3 +141,75 @@ def test_status_api(env):
     client, ids, tmp, _ = env
     assert client.get("/api/status").json() == {"unsaved": 0, "saved": 3, "total": 3,
                                                  "camera": "branché", "full": False}
+
+
+def test_no_link_leads_to_an_error(env):
+    """Chaque lien de chaque écran mène à une page qui répond (jamais d'erreur brute)."""
+    client, ids, tmp, _ = env
+    client.post(f"/api/photo/{ids[1]}/flag", json={"flag": "reject"}, headers=H)
+    seen, todo = set(), ["/", "/sessions", "/rejet", "/corbeille", "/reglages", "/journal"]
+    while todo:
+        url = todo.pop()
+        if url in seen:
+            continue
+        seen.add(url)
+        r = client.get(url)
+        assert r.status_code == 200, url
+        if "text/html" in r.headers["content-type"]:
+            assert not JARGON.search(text(r.text)), (url, JARGON.search(text(r.text)))
+            todo += [h.replace("&amp;", "&") for h in re.findall(r'href="(/[^"]*)"', r.text)
+                     if not h.startswith(("/static", "/media"))]
+    r = client.get("/nimporte-quoi")
+    assert r.status_code == 404 and "Cette page n'existe pas" in r.text
+
+
+def test_sessions_create_activate_stop(env):
+    client, ids, tmp, _ = env
+    assert "Aucune" in text(client.get("/sessions").text)
+    assert client.post("/api/sessions", json={"name": "Rando Vercors"}).status_code == 403
+    assert client.post("/api/sessions", json={"name": "  "}, headers=H).status_code == 400
+    sid = client.post("/api/sessions", json={"name": "Rando Vercors"}, headers=H).json()["id"]
+    t = text(client.get("/sessions").text)
+    assert "Rando Vercors" in t and "Prochaine photo : n° 0001" in t
+    assert "Session active" in text(client.get("/").text)
+    other = client.post("/api/sessions", json={"name": "Studio"}, headers=H).json()["id"]
+    assert client.post("/api/sessions/active", json={"id": sid}, headers=H).json() == {"id": sid}
+    assert client.post("/api/sessions/active", json={"id": 999}, headers=H).status_code == 404
+    assert client.post("/api/sessions/active", json={"id": None}, headers=H).json() == {"id": None}
+    with Database(tmp / "c.db") as db:
+        assert db.active_session() is None and {s.id for s in db.list_sessions()} == {sid, other}
+
+
+def test_reject_then_trash_then_restore(env):
+    client, ids, tmp, pool = env
+    client.post(f"/api/photo/{ids[0]}/flag", json={"flag": "reject"}, headers=H)
+    client.post(f"/api/photo/{ids[1]}/flag", json={"flag": "reject"}, headers=H)
+    t = text(client.get("/rejet").text)
+    assert "2 photos" in t and "plus sur l'appareil photo" in t and "24 h 00" in t
+    # ids[1] « dé-rejetée » entre l'affichage et la confirmation : elle n'est pas supprimée.
+    client.post(f"/api/photo/{ids[1]}/flag", json={"flag": "none"}, headers=H)
+    r = client.post("/api/corbeille/mettre", json={"ids": [ids[0], ids[1]]}, headers=H)
+    assert r.json() == {"count": 1}
+    with Database(tmp / "c.db") as db:
+        p = db.get(ids[0])
+        assert p.in_trash and ".cadt/corbeille" in p.local_path
+        assert not db.get(ids[1]).trashed_at
+    t = text(client.get("/corbeille").text)
+    assert "Récupérables encore" in t and "Récupérer" in t
+    assert client.post("/api/corbeille/recuperer", json={"id": ids[0]}, headers=H).json() == {"count": 1}
+    assert f"/photo/{ids[0]}?" in client.get("/").text
+    assert "La corbeille est vide" in text(client.get("/corbeille?r=1").text)
+
+
+def test_empty_trash(env):
+    client, ids, tmp, pool = env
+    client.post(f"/api/photo/{ids[2]}/flag", json={"flag": "reject"}, headers=H)
+    client.post("/api/corbeille/mettre", json={"ids": [ids[2]]}, headers=H)
+    with Database(tmp / "c.db") as db:
+        path = db.get(ids[2]).local_path
+    assert client.post("/api/corbeille/vider", json={}, headers=H).json()["freed"] == 3000
+    with Database(tmp / "c.db") as db:
+        assert db.get(ids[2]).purged_at
+    from pathlib import Path
+    assert not Path(path).exists()
+    assert "La corbeille est vide" in text(client.get("/corbeille").text)

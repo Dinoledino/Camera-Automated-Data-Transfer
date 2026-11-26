@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Corbeille{% endblock %}
+{% block content %}
+<div class="page">
+<header class="viewer-head">
+  <a class="icon-btn" href="/" aria-label="Retour"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></a>
+  <h1 class="h2">Corbeille</h1>
+</header>
+<main class="stack">
+{% if items %}
+  <div class="notice">
+    <svg viewBox="0 0 24 24" class="blue" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    <span class="small">Récupérables encore <strong>{{ left }}</strong>, ou jusqu'à ce que le téléphone s'éteigne. Ensuite, elles seront supprimées définitivement.</span>
+  </div>
+  {% if restored %}<p class="small ok" role="status">Photo récupérée : elle est de retour dans la galerie.</p>{% endif %}
+  {% for it in items %}
+  <div class="row-item">
+    <img class="mini" src="/media/thumb/{{ it.photo.id }}" alt="">
+    <span class="grow"><span class="strong ellipsis">{{ it.name }}</span>
+      <span class="small muted">Mise à la corbeille {{ it.when }} · {{ it.photo.size | human_size }}</span></span>
+    <button type="button" class="pill blue-pill" data-restore="{{ it.photo.id }}">Récupérer</button>
+  </div>
+  {% endfor %}
+{% else %}
+  {% if restored %}<p class="small ok" role="status">Photo récupérée : elle est de retour dans la galerie.</p>{% endif %}
+  <p class="lead muted center">La corbeille est vide.</p>
+{% endif %}
+</main>
+<footer class="footer">
+  {% if items %}<button type="button" class="btn danger-outline" id="ask-empty">Vider la corbeille maintenant</button>{% endif %}
+  <span class="small muted">Si la mémoire du téléphone se remplit, la corbeille est vidée en premier (les plus anciennes d'abord).</span>
+</footer>
+{% if items %}
+<div class="overlay" id="confirm-empty" hidden>
+  <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <h2 id="confirm-title">Supprimer définitivement {{ items|length }} photo{{ "s" if items|length > 1 }} ?</h2>
+    <p class="small muted">Elles ne sont plus sur l'appareil photo : cette action ne peut pas être annulée.</p>
+    <button type="button" class="btn danger" id="do-empty">Supprimer définitivement</button>
+    <button type="button" class="btn ghost" id="cancel-empty">Annuler</button>
+  </section>
+</div>
+{% endif %}
+</div>
+{% endblock %}
+{% block nav %}{% endblock %}

@@ -115,3 +115,16 @@ def rejected_count(db: Database) -> int:
 
 def media_row(db: Database, photo_id: int):
     return db.conn.execute("SELECT * FROM media WHERE photo_id = ?", (photo_id,)).fetchone()
+
+
+def session_counts(db: Database) -> dict[int, int]:
+    """Nombre de photos visibles par session."""
+    rows = db.conn.execute(f"SELECT session_id, count(*) FROM photos WHERE {VISIBLE} "
+                           "AND session_id IS NOT NULL GROUP BY session_id").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def rejected_photos(db: Database) -> list[Photo]:
+    rows = db.conn.execute(f"SELECT * FROM photos WHERE {VISIBLE} AND flag = 'reject' "
+                           f"ORDER BY {ORDER}").fetchall()
+    return [Photo(**dict(r)) for r in rows]
